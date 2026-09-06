@@ -60,13 +60,23 @@ async def run_fuzz_cycle(seed_count: int = 25) -> bool:
     return True
 
 
+def _find_bin(name: str) -> str:
+    venv_bin = Path(sys.prefix) / "bin" / name
+    if venv_bin.exists():
+        return str(venv_bin)
+    import shutil
+
+    found = shutil.which(name)
+    return found if found else name
+
+
 def run_quality_gates() -> bool:
     print("\n[Quality Gates] Checking linters, types, and test suite...")
     cmds = [
-        ["ruff", "check", "."],
-        ["ruff", "format", "--check", "."],
-        ["mypy", "--strict", "peerq", "tests", "bench", "examples", "scripts"],
-        ["pytest", "-q", "--cov=peerq", "--cov-fail-under=90", "tests/"],
+        [_find_bin("ruff"), "check", "."],
+        [_find_bin("ruff"), "format", "--check", "."],
+        [_find_bin("mypy"), "--strict", "peerq", "tests", "bench", "examples", "scripts"],
+        [_find_bin("pytest"), "-q", "--cov=peerq", "--cov-fail-under=90", "tests/"],
     ]
 
     for cmd in cmds:
