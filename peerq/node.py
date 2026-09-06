@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import hashlib
+import json
+import os
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -81,6 +83,15 @@ class PeerNode:
         self.rng = rng
         self.peers = [p for p in peers if p != node_id]
         self.handler = handler
+        if lease_duration is None or lease_duration == 5.0:
+            env_lease = os.environ.get("PEERQ_LEASE_DURATION")
+            if env_lease:
+                try:
+                    lease_duration = float(env_lease)
+                except ValueError:
+                    pass
+        if lease_duration is None:
+            lease_duration = 5.0
         self.lease_duration = lease_duration
         self.heartbeat_interval = heartbeat_interval
         self.gossip_interval = gossip_interval
@@ -302,7 +313,20 @@ class PeerNode:
             # Claim the task
             new_token = record.fence_token.next_for(self.node_id)
             self._vector_clock = self._vector_clock.increment(self.node_id)
-            lease_exp = self.clock.now() + self.lease_duration
+            task_lease_duration = self.lease_duration
+            if isinstance(record.payload, bytes):
+                try:
+                    payload_obj = json.loads(record.payload.decode("utf-8"))
+                    if isinstance(payload_obj, dict) and "lease_duration" in payload_obj:
+                        task_lease_duration = float(payload_obj["lease_duration"])
+                except Exception:
+                    pass
+            elif isinstance(record.payload, dict) and "lease_duration" in record.payload:
+                try:
+                    task_lease_duration = float(record.payload["lease_duration"])
+                except Exception:
+                    pass
+            lease_exp = self.clock.now() + task_lease_duration
 
             claimed_record = TaskRecord(
                 task_id=task_id,

@@ -52,6 +52,7 @@ async def run_node_command(
     discovery_port: int = 19876,
     cluster_id: str = "peerq-default",
     status_port: int | None = None,
+    lease_duration: float | None = None,
 ) -> None:
     clock = RealClock()
     peer_addresses = _parse_peer_addresses(peers_str)
@@ -78,6 +79,7 @@ async def run_node_command(
         peers=list(peer_addresses.keys()),
         handler=default_handler,
         wal=wal,
+        lease_duration=lease_duration,
     )
     await node.start()
 
@@ -202,6 +204,12 @@ def main() -> None:
     node_parser.add_argument(
         "--status-port", type=int, default=None, help="HTTP dashboard / metrics port"
     )
+    node_parser.add_argument(
+        "--lease-duration",
+        type=float,
+        default=None,
+        help="Task lease duration in seconds (defaults to PEERQ_LEASE_DURATION or 5.0)",
+    )
 
     # Command: submit
     submit_parser = subparsers.add_parser("submit", help="Submit task to a running node")
@@ -236,6 +244,7 @@ def main() -> None:
                     discovery_port=args.discovery_port,
                     cluster_id=args.cluster_id,
                     status_port=args.status_port,
+                    lease_duration=args.lease_duration,
                 )
             )
         except KeyboardInterrupt:

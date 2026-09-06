@@ -328,3 +328,64 @@ async def test_node_queue_full_rejection() -> None:
         await node.submit_task("t2", b"2")
 
     await node.stop()
+
+
+@pytest.mark.asyncio
+async def test_node_payload_lease_duration() -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("n1", net)
+    rng = random.Random(42)
+
+    # Task takes 10 seconds to execute, which would exceed default 5s lease
+    async def slow_handler(payload: bytes) -> bytes:
+        await clock.sleep(10.0)
+        return b"done-slow"
+
+    node = PeerNode(
+        "n1",
+        clock,
+        t1,
+        rng,
+        peers=[],
+        handler=slow_handler,
+        lease_duration=5.0,
+    )
+    await node.start()
+
+    # Payload explicitly sets lease_duration to 30.0s
+    payload = b'{"task": "long_quant", "lease_duration": 30.0}'
+    await node.submit_task("t-long", payload)
+
+    # Step clock to allow claim and execution
+    clock.advance(0.1)
+    await clock.sleep(0)
+
+    # Verify that the task was claimed with the 30.0s lease duration
+    rec = node.get_task("t-long")
+    assert rec is not None
+    assert rec.lease_expiry >= 30.0
+
+    # Advance virtual clock by 10s to let handler finish
+    clock.advance(10.0)
+    await clock.sleep(0)
+
+    rec_finished = node.get_task("t-long")
+    assert rec_finished is not None
+    assert rec_finished.state == TaskState.DONE
+    assert rec_finished.result == b"done-slow"
+    assert node.metrics.get_counter("rejected") == 0
+
+    await node.stop()
+
+
+def test_node_env_lease_duration(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("n1", net)
+    rng = random.Random(42)
+
+    monkeypatch.setenv("PEERQ_LEASE_DURATION", "45.0")
+    node = PeerNode("n1", clock, t1, rng, peers=[])
+    assert node.lease_duration == 45.0
+

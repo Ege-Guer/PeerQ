@@ -280,3 +280,27 @@ async def test_discovery_malformed_partial_json() -> None:
 
     assert d1.get_active_peers() == {}
     await d1.stop()
+
+
+@pytest.mark.asyncio
+async def test_discovery_sender_addr_formats() -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    b1 = SimBroadcastTransport("n1", net)
+    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock)
+    await d1.start()
+
+    # Sender as string IP
+    b1.deliver("192.168.1.100", b'{"node_id": "n2", "host": "0.0.0.0", "port": 9002, "cluster_id": "peerq-default"}')
+    # Sender as tuple (ip, port)
+    b1._inbox.put_nowait((("192.168.1.200", 9003), b'{"node_id": "n3", "host": "0.0.0.0", "port": 9003, "cluster_id": "peerq-default"}'))
+
+    clock.advance(0.1)
+    await clock.sleep(0)
+
+    peers = d1.get_active_peers()
+    assert peers.get("n2") == ("192.168.1.100", 9002)
+    assert peers.get("n3") == ("192.168.1.200", 9003)
+
+    await d1.stop()
+
