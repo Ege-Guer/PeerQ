@@ -40,6 +40,7 @@ from peerq.transport import (
     Message,
     TcpTransport,
     Transport,
+    UdpBroadcastTransport,
 )
 from peerq.wal import (
     RECORD_CHECKPOINT,
@@ -75,6 +76,7 @@ __all__ = [
     "Message",
     "TcpTransport",
     "Transport",
+    "UdpBroadcastTransport",
     "WriteAheadLog",
     "WalRecord",
     "WalError",

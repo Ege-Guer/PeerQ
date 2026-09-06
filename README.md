@@ -132,6 +132,103 @@ Key architectural decisions and trade-offs are documented under [`docs/adr/`](do
 
 ---
 
+## Quick Start: Python SDK (For Applications & AI Agents)
+
+To integrate `peerq` into your project or invoke it from an autonomous AI agent, install the package and define your application-specific task execution handler:
+
+```python
+import asyncio
+import random
+import socket
+from peerq import PeerNode, RealClock, TcpTransport, UdpBroadcastTransport, PeerDiscovery
+
+
+# 1. Define your project-specific task execution logic
+async def my_task_handler(payload: bytes) -> bytes:
+    task_str = payload.decode(errors="replace")
+    print(f"Executing task: {task_str}")
+    # Perform computation, ML inference, image rendering, or database work
+    return f"COMPLETED({task_str})".encode()
+
+
+async def main():
+    my_id = socket.gethostname().split(".")[0].lower()
+    clock = RealClock()
+
+    # 2. Bind TCP transport to all interfaces (0.0.0.0) for network reachability
+    transport = TcpTransport(
+        node_id=my_id, host="0.0.0.0", port=9001, peer_addresses={}, clock=clock
+    )
+    await transport.start()
+
+    # 3. Initialize mesh node with your task handler
+    node = PeerNode(
+        node_id=my_id,
+        clock=clock,
+        transport=transport,
+        rng=random.Random(),
+        peers=[],
+        handler=my_task_handler,
+    )
+    await node.start()
+
+    # 4. Enable zero-config UDP discovery (auto-pairs with other nodes on LAN/WiFi)
+    b_transport = UdpBroadcastTransport(port=19876)
+    await b_transport.start()
+    discovery = PeerDiscovery(
+        node_id=my_id,
+        tcp_host="0.0.0.0",
+        tcp_port=transport.port,
+        broadcast_transport=b_transport,
+        clock=clock,
+    )
+    discovery.bind_node(node)
+    await discovery.start()
+
+    print(f"Node '{my_id}' is live and participating in the mesh!")
+
+    # 5. Ingest a task into the mesh (will be claimed and executed across available peers)
+    await node.submit_task(task_id="task-101", payload=b"Process-Image-Batch-A")
+
+    await asyncio.Event().wait()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+See [`examples/custom_worker.py`](examples/custom_worker.py) for a complete standalone implementation.
+
+---
+
+## Multi-Device / Local Network (LAN) Setup
+
+To connect nodes across different physical machines (e.g. your **MacBook** and your **PC** on the same WiFi or LAN):
+
+1. **Install PeerQ on both machines**:
+   ```bash
+   git clone https://github.com/Ege-Guer/PeerQ.git
+   cd PeerQ
+   pip install -e .
+   ```
+
+2. **Start a node on Machine 1 (MacBook)**:
+   ```bash
+   peerq node --id macbook --host 0.0.0.0 --port 9001 --discovery --status-port 9102
+   ```
+
+3. **Start a node on Machine 2 (PC / Linux)**:
+   ```bash
+   peerq node --id pc-worker --host 0.0.0.0 --port 9001 --discovery --status-port 9102
+   ```
+
+> [!TIP]
+> - **Zero-Config Pairing**: The nodes will automatically find each other via UDP multicast beacon on port 19876 and establish direct TCP mesh links.
+> - **Firewall Note**: If your operating system (macOS Application Firewall or Windows Defender) displays a network prompt, select **Allow / Erlauben** for Python to accept incoming traffic on TCP 9001 and UDP 19876.
+> - **Web Dashboard**: Open `http://localhost:9102` in your browser on either device to view the live cluster topology and active task leases in real time.
+
+---
+
 ## Command-Line Interface (CLI)
 
 The `peerq` CLI provides native commands for production nodes and task ingestion:
@@ -205,6 +302,9 @@ curl http://localhost:9103/status
 ```bash
 # In-memory mesh demonstration (task execution, gossip, lease fencing)
 python examples/demo.py
+
+# Custom worker with application task handler and subnet discovery
+python examples/custom_worker.py
 
 # Zero-configuration cluster (UDP multicast discovery, Ed25519 signatures, HTTP dashboard)
 python examples/zero_config_cluster.py
