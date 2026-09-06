@@ -75,6 +75,9 @@ All benchmark numbers are measured directly from committed reproducible scripts.
 | **Telemetry Overhead** | **603.42 ns / op** | `LogLinearHistogram.record()` CPU delta | [`bench/results/overhead_raw.txt`](bench/results/overhead_raw.txt) |
 | **Counter Overhead** | **94.84 ns / op** | `MetricsCollector.increment()` CPU delta | [`bench/results/overhead_raw.txt`](bench/results/overhead_raw.txt) |
 | **Vector Clock Overhead** | **744.36 ns / op** | Immutable `VectorClock.increment()` CPU delta | [`bench/results/overhead_raw.txt`](bench/results/overhead_raw.txt) |
+| **WAL Append (Buffered)** | **60,560 records/sec** (22.9 MB/s) | 30,000 serialized & CRC32-framed TaskRecords | [`bench/results/wal_throughput_raw.txt`](bench/results/wal_throughput_raw.txt) |
+| **WAL Append (fsync)** | **16,686 fsyncs/sec** (0.060 ms/op) | Synchronous disk barrier per record | [`bench/results/wal_throughput_raw.txt`](bench/results/wal_throughput_raw.txt) |
+| **WAL Replay & Verify** | **218,024 records/sec** (82.6 MB/s) | Sequential replay with 32-bit CRC validation | [`bench/results/wal_throughput_raw.txt`](bench/results/wal_throughput_raw.txt) |
 
 ### Reproducing Locally
 ```bash
@@ -86,6 +89,9 @@ python bench/latency.py
 
 # Run telemetry overhead benchmark
 python bench/overhead.py
+
+# Run Write-Ahead Log (WAL) throughput benchmark
+python bench/wal_throughput.py
 ```
 
 ---

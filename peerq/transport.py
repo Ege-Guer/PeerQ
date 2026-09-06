@@ -191,6 +191,10 @@ class TcpTransport:
     async def start(self) -> None:
         """Start listening for incoming TCP connections."""
         self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
+        if self._server.sockets:
+            sock_name = self._server.sockets[0].getsockname()
+            if isinstance(sock_name, tuple) and len(sock_name) >= 2:
+                self.port = int(sock_name[1])
 
     async def _handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter

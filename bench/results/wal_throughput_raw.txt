@@ -1,0 +1,32 @@
+=================================================================
+PEERQ WRITE-AHEAD LOG (WAL) THROUGHPUT BENCHMARK
+=================================================================
+Timestamp:       2026-09-06 13:06:34 UTC
+Platform:        macOS-26.5.1-arm64-arm-64bit
+Processor:       arm
+Python:          3.12.4 (CPython)
+Command line:    bench/wal_throughput.py
+=================================================================
+
+Phase 1: Appending 30,000 records (buffered OS cache)...
+  Total records:     30,000
+  Elapsed time:      0.4899 s
+  Log file size:     11.37 MB (11,917,792 bytes)
+  Append Throughput: 61,232.7 records/sec
+  Write Bandwidth:   23.20 MB/sec
+
+Phase 2: Appending 500 records (strict os.fsync on every record)...
+  Total records:     500
+  Elapsed time:      0.0316 s
+  Sync Throughput:   15,799.5 fsyncs/sec
+  Average fsync:     0.063 ms/record
+
+Phase 3: Sequential replay & CRC32 verification (30,500 records)...
+  Verified records:  30,500
+  Elapsed time:      0.1417 s
+  Replay Throughput: 215,173.1 records/sec
+  Replay Bandwidth:  81.52 MB/sec
+
+=================================================================
+WAL BENCHMARK COMPLETE
+=================================================================
