@@ -46,7 +46,7 @@ class _PrioritizedItem(Generic[T]):
 
 class BackpressurePriorityQueue(Generic[T]):
     """
-    Backpressure-aware priority queue.
+    Backpressure-aware priority queue with asyncio.Condition signalling.
 
     Items with higher priority values are dequeued before items with lower priority.
     Items with equal priority are dequeued strictly in FIFO order.
@@ -74,6 +74,21 @@ class BackpressurePriorityQueue(Generic[T]):
             return False
         return len(self._heap) >= self.maxsize
 
+    async def _async_notify(self) -> None:
+        async with self._cond:
+            self._cond.notify()
+
+    def _notify_condition(self) -> None:
+        """Signal waiting consumers via asyncio.Condition."""
+        if self._cond.locked():
+            self._cond.notify()
+        else:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._async_notify())
+            except RuntimeError:
+                pass
+
     def put_nowait(self, item: T, priority: int = 0) -> None:
         """Enqueue an item immediately or raise QueueFull."""
         if self.full():
@@ -82,6 +97,7 @@ class BackpressurePriorityQueue(Generic[T]):
         entry = _PrioritizedItem(priority_neg=-priority, seq=self._seq, item=item)
         self._seq += 1
         heapq.heappush(self._heap, entry)
+        self._notify_condition()
 
     async def put(self, item: T, priority: int = 0) -> None:
         """Enqueue an item, blocking or rejecting depending on policy."""
@@ -104,6 +120,7 @@ class BackpressurePriorityQueue(Generic[T]):
             raise QueueEmpty("Queue is empty")
 
         entry = heapq.heappop(self._heap)
+        self._notify_condition()
         return -entry.priority_neg, entry.item
 
     async def get(self) -> tuple[int, T]:
