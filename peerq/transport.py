@@ -240,6 +240,10 @@ class TcpTransport:
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
     ) -> None:
         self._incoming_writers.add(writer)
+        sock = writer.get_extra_info("socket")
+        if sock is not None:
+            with contextlib.suppress(Exception):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         try:
             while not self._closed:
                 length_bytes = await reader.readexactly(4)
@@ -268,6 +272,10 @@ class TcpTransport:
 
         host, port = self.peer_addresses[peer_id]
         reader, writer = await asyncio.open_connection(host, port)
+        sock = writer.get_extra_info("socket")
+        if sock is not None:
+            with contextlib.suppress(Exception):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         self._connections[peer_id] = (reader, writer)
         return reader, writer
 
@@ -275,8 +283,15 @@ class TcpTransport:
         if self._closed:
             raise RuntimeError(f"Transport {self.node_id} is closed")
         _, writer = await self._get_or_connect(peer_id)
-        writer.write(msg.to_bytes())
-        await writer.drain()
+        try:
+            writer.write(msg.to_bytes())
+            await writer.drain()
+        except Exception:
+            self._connections.pop(peer_id, None)
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            raise
 
     async def recv(self) -> tuple[str, Message]:
         if self._closed and self._inbox.empty():
