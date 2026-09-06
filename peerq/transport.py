@@ -128,9 +128,7 @@ class SimNetwork:
                 if symmetric:
                     self._blocked_links.add((b, a))
 
-    def heal_partition(
-        self, group_a: set[str], group_b: set[str], symmetric: bool = True
-    ) -> None:
+    def heal_partition(self, group_a: set[str], group_b: set[str], symmetric: bool = True) -> None:
         """Heal a network partition between two groups of nodes."""
         for a in group_a:
             for b in group_b:

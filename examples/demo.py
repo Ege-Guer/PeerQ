@@ -24,7 +24,7 @@ async def task_handler(payload: bytes) -> bytes:
     """Simulate realistic CPU/IO task workload."""
     text = payload.decode("utf-8")
     await asyncio.sleep(0.01)  # Real time delay
-    return f"PROCESSED[{text.upper()}]".encode("utf-8")
+    return f"PROCESSED[{text.upper()}]".encode()
 
 
 def _is_task_done(rec: TaskRecord | None) -> bool:
@@ -66,7 +66,7 @@ async def main() -> None:
         task_ids.append(tid)
         priority = (i % 3) * 5  # priorities 0, 5, 10
         submitter = nodes[i % len(nodes)]
-        payload = f"item-{i}".encode("utf-8")
+        payload = f"item-{i}".encode()
         await submitter.submit_task(tid, payload, priority=priority)
         print(f"   [Submitted] {tid} -> {submitter.node_id} (priority={priority})")
 
