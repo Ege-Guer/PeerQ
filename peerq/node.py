@@ -4,16 +4,18 @@ Leaderless PeerNode coordinator.
 Integrates:
 - BackpressurePriorityQueue for local task scheduling.
 - CRDT TaskRecords and VectorClocks for conflict-free state replication.
-- Fencing tokens for stale-lease prevention.
+- Fencing tokens and lease expiry checks for stale-lease prevention.
 - PhiAccrualDetector for adaptive failure detection.
 - LogLinearHistogram & MetricsCollector for telemetry.
 - CreditFlowController for backpressure send windows.
+- Rendezvous hashing for deterministic lease reclaim selection.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import random
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -32,6 +34,18 @@ from peerq.queue import BackpressurePriorityQueue, CreditFlowController, QueueFu
 from peerq.transport import Message, Transport
 
 TaskHandler = Callable[[bytes], Awaitable[bytes]]
+
+
+def _rendezvous_reclaimer(task_id: str, candidate_peers: list[str]) -> str | None:
+    """Deterministically elect primary reclaimer for a task among live candidates."""
+    if not candidate_peers:
+        return None
+
+    def _score(p: str) -> int:
+        digest = hashlib.sha256(f"{task_id}:{p}".encode()).digest()
+        return int.from_bytes(digest[:8], "big")
+
+    return max(candidate_peers, key=_score)
 
 
 class PeerNode:
@@ -200,6 +214,13 @@ class PeerNode:
             with contextlib.suppress(Exception):
                 await self.transport.send(partner, msg)
 
+    async def _broadcast_task_update(self, task_id: str, record: TaskRecord) -> None:
+        """Immediately broadcast a task state change to all peers."""
+        msg = Message("gossip", self.node_id, {"tasks": {task_id: record.to_dict()}})
+        for peer in self.peers:
+            with contextlib.suppress(Exception):
+                await self.transport.send(peer, msg)
+
     async def _worker_loop(self) -> None:
         assert self.handler is not None
         while self._running:
@@ -242,6 +263,9 @@ class PeerNode:
             self._tasks[task_id] = claimed_record
             self.metrics.increment("claimed")
 
+            # Broadcast claim
+            await self._broadcast_task_update(task_id, claimed_record)
+
             # Transition to RUNNING
             running_record = TaskRecord(
                 task_id=task_id,
@@ -265,10 +289,18 @@ class PeerNode:
                 error = str(exc)
                 new_state = TaskState.FAILED
 
-            # Verify fencing token before committing
+            # Crucial fencing token & lease expiry verification:
+            # If execution exceeded lease_expiry, or if our token was superseded,
+            # we must NOT commit a stale result!
+            current_time = self.clock.now()
             current = self._tasks.get(task_id)
+            if current_time > lease_exp:
+                # Lease expired during execution: do not commit!
+                self.metrics.increment("rejected")
+                continue
+
             if current is not None and current.fence_token > new_token:
-                # Our lease was superseded during execution! Reject stale commit.
+                # Superseded by higher fencing token: do not commit!
                 self.metrics.increment("rejected")
                 continue
 
@@ -287,6 +319,7 @@ class PeerNode:
                 updated_by=self.node_id,
             )
             self._tasks[task_id] = committed_record
+            await self._broadcast_task_update(task_id, committed_record)
 
             if new_state == TaskState.DONE:
                 self.metrics.increment("completed")
@@ -300,10 +333,15 @@ class PeerNode:
                     await self.transport.send(record.updated_by, credit_msg)
 
     async def _reclaim_loop(self) -> None:
-        """Periodic audit of task leases for failure detection & reclamation."""
+        """Periodic audit of task leases with rendezvous reclaimer election."""
         while self._running:
             await self.clock.sleep(self.reclaim_interval)
             now = self.clock.now()
+
+            # Determine currently live peers according to failure detector
+            live_peers = [self.node_id] + [
+                p for p in self.peers if not self.failure_detector.is_suspected(p)
+            ]
 
             for task_id, record in list(self._tasks.items()):
                 if (
@@ -313,9 +351,13 @@ class PeerNode:
                     lease_expired = record.lease_expiry <= now
                     holder = record.claimed_by or ""
                     holder_suspected = self.failure_detector.is_suspected(holder)
+
                     if lease_expired and holder_suspected:
-                        self.metrics.increment("reclaimed")
-                        if task_id not in self._queued_task_ids:
-                            with contextlib.suppress(QueueFull):
-                                self._queue.put_nowait(task_id, priority=10)
-                                self._queued_task_ids.add(task_id)
+                        # Elect deterministic reclaimer among live peers
+                        elected = _rendezvous_reclaimer(task_id, live_peers)
+                        if elected == self.node_id:
+                            self.metrics.increment("reclaimed")
+                            if task_id not in self._queued_task_ids:
+                                with contextlib.suppress(QueueFull):
+                                    self._queue.put_nowait(task_id, priority=10)
+                                    self._queued_task_ids.add(task_id)
