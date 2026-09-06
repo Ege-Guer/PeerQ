@@ -252,3 +252,24 @@ class SimCluster:
             assert completed_anywhere, (
                 f"Invariant: Task {tid} vanished or never completed across live nodes!"
             )
+
+    def assert_eventual_consistency(self) -> None:
+        """Verify that all live active nodes have converged on identical terminal task results."""
+        if not self.active_nodes:
+            return
+        for tid in self._submitted_tasks:
+            states = {pid: self.nodes[pid].get_task(tid) for pid in self.active_nodes}
+            terminal_states = {
+                pid: rec.state
+                for pid, rec in states.items()
+                if rec is not None and rec.state.is_terminal
+            }
+            assert len(terminal_states) == len(self.active_nodes), (
+                f"Eventual consistency failed for {tid}: "
+                f"not all live nodes reached terminal state: {states}"
+            )
+            distinct_results = {rec.result for rec in states.values() if rec is not None}
+            assert len(distinct_results) == 1, (
+                f"Eventual consistency failed for {tid}: "
+                f"divergent results across live nodes: {states}"
+            )
