@@ -144,3 +144,23 @@ async def test_credit_waiter_cancellation() -> None:
     # Replenish now: should not crash with cancelled future
     fc.replenish("peer-b", 2)
     assert fc.get_credits("peer-b") == 2
+
+
+@pytest.mark.asyncio
+async def test_queue_reject_on_full_async_put() -> None:
+    q: BackpressurePriorityQueue[str] = BackpressurePriorityQueue(
+        maxsize=1, policy=QueuePolicy.REJECT_ON_FULL
+    )
+    await q.put("item-1", priority=1)
+    with pytest.raises(QueueFull):
+        await q.put("item-2", priority=1)
+
+
+def test_credit_flow_unknown_peer() -> None:
+    fc = CreditFlowController(initial_credits=5)
+    # Unknown peer gets initial_credits
+    assert fc.get_credits("unknown-peer") == 5
+
+    # Replenishing an unknown peer initializes it
+    fc.replenish("another-unknown", 3)
+    assert fc.get_credits("another-unknown") == 8

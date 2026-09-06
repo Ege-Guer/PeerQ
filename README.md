@@ -115,18 +115,40 @@ Key architectural decisions and trade-offs are documented under [`docs/adr/`](do
 - [ADR 0003: Leaderless Gossip Mesh vs. Raft-Replicated Broker](docs/adr/0003-leaderless-gossip-vs-raft-broker.md)
 - [ADR 0004: Adaptive φ-Accrual vs. Fixed-Timeout Failure Detection](docs/adr/0004-phi-accrual-vs-fixed-timeout.md)
 - [ADR 0005: Write-Ahead Log (WAL) and Crash-Recovery State Replay](docs/adr/0005-write-ahead-log-and-crash-recovery.md)
+- [ADR 0006: Ed25519 Digital Signatures and Byzantine Fault Resistance](docs/adr/0006-ed25519-signatures-and-byzantine-fault-tolerance.md)
+- [ADR 0007: Zero-Configuration Local Peer Discovery via UDP Multicast and Broadcast](docs/adr/0007-zero-configuration-peer-discovery.md)
+
+---
+
+## Command-Line Interface (CLI)
+
+The `peerq` CLI provides native commands for production nodes and task ingestion:
+
+```bash
+# 1. Start a node with zero-config UDP discovery and HTTP status dashboard
+peerq node --id node-1 --port 9001 --discovery --status-port 9102
+
+# 2. Start a peer node on the same machine/LAN (finds node-1 automatically)
+peerq node --id node-2 --port 9002 --discovery --status-port 9103
+
+# 3. Query cluster topology, queue depth, and health over HTTP
+peerq status --endpoint http://127.0.0.1:9102/status
+
+# 4. Ingest a task into the running mesh
+peerq submit --target-port 9001 --task-id task-100 --payload "process-dataset"
+```
 
 ---
 
 ## Verification & Quality Gates
 
-The test suite runs in under 5 seconds and enforces strict type and architecture checks:
+The test suite runs in under 8 seconds and enforces strict type, architecture, and invariant checks:
 
 ```bash
 # Quality Gates
 ruff check .
 ruff format --check .
-mypy --strict peerq tests bench examples
+mypy --strict peerq tests bench examples scripts
 
 # Test Suite with Coverage (>= 90% floor)
 pytest --cov=peerq --cov-report=term-missing tests/
@@ -137,8 +159,12 @@ pytest tests/sim/ --durations=10
 
 ---
 
-## Quickstart & Runnable Demo
+## Runnable Demos
 
 ```bash
+# In-memory mesh demonstration (task execution, gossip, lease fencing)
 python examples/demo.py
+
+# Zero-configuration cluster (UDP multicast discovery, Ed25519 signatures, HTTP dashboard)
+python examples/zero_config_cluster.py
 ```

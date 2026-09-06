@@ -1,4 +1,4 @@
-"""Unit tests for peerq.transport."""
+import asyncio
 
 import pytest
 
@@ -117,3 +117,69 @@ async def test_tcp_transport_loopback() -> None:
     finally:
         await t1.close()
         await t2.close()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_transport_packet_drop_and_latency() -> None:
+    import random
+
+    clock = SimClock(0.0)
+    rng = random.Random(42)
+    net = SimNetwork(clock, rng=rng)
+    net.drop_rate = 1.0
+    t1 = InMemoryTransport("n1", net)
+    t2 = InMemoryTransport("n2", net)
+
+    # 100% drop probability -> packet never arrives
+    await t1.send("n2", Message("ping", "n1", {}))
+    assert t2._inbox.empty()
+
+    # Reset drop, add latency
+    net.drop_rate = 0.0
+    net.base_latency = 1.5
+    send_task = asyncio.create_task(t1.send("n2", Message("ping2", "n1", {})))
+    await asyncio.sleep(0)
+
+    # Not yet arrived before latency advances
+    assert t2._inbox.empty()
+    clock.advance(1.6)
+    await clock.sleep(0)
+    await send_task
+    assert not t2._inbox.empty()
+    _, msg = await t2.recv()
+    assert msg.msg_type == "ping2"
+
+    # Send to unregistered peer -> dropped safely
+    await t1.send("unregistered_node", Message("ping3", "n1", {}))
+
+    await t1.close()
+    await t2.close()
+
+
+@pytest.mark.asyncio
+async def test_tcp_transport_errors() -> None:
+    clock = RealClock()
+    t = TcpTransport("p1", "127.0.0.1", 18099, {}, clock)
+
+    # Sending to unregistered peer -> ValueError
+    with pytest.raises(ValueError, match="Unknown peer address"):
+        await t.send("p2", Message("test", "p1", {}))
+
+    await t.close()
+
+    # Sending or receiving on closed transport -> RuntimeError
+    with pytest.raises(RuntimeError, match="is closed"):
+        await t.send("p2", Message("test", "p1", {}))
+
+    with pytest.raises(RuntimeError, match="is closed"):
+        await t.recv()
+
+
+def test_udp_broadcast_transport_multicast_detection() -> None:
+    from peerq.transport import UdpBroadcastTransport
+
+    assert UdpBroadcastTransport._is_multicast("239.255.42.99") is True
+    assert UdpBroadcastTransport._is_multicast("224.0.0.1") is True
+    assert UdpBroadcastTransport._is_multicast("127.0.0.1") is False
+    assert UdpBroadcastTransport._is_multicast("192.168.1.255") is False
+    assert UdpBroadcastTransport._is_multicast("invalid-ip") is False

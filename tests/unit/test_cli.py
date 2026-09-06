@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -133,3 +134,59 @@ def test_main_keyboard_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(SystemExit) as exc_info:
         main()
     assert exc_info.value.code == 0
+
+
+@pytest.mark.asyncio
+async def test_run_node_command_with_discovery_and_status(tmp_path: Path) -> None:
+    from unittest.mock import MagicMock
+
+    mock_transport = AsyncMock()
+    mock_node = AsyncMock()
+    mock_discovery = MagicMock()
+    mock_discovery.start = AsyncMock()
+    mock_discovery.stop = AsyncMock()
+    mock_status_server = AsyncMock()
+    mock_udp = AsyncMock()
+
+    with (
+        patch("peerq.cli.TcpTransport", return_value=mock_transport),
+        patch("peerq.cli.PeerNode", return_value=mock_node),
+        patch("peerq.cli.UdpBroadcastTransport", return_value=mock_udp),
+        patch("peerq.cli.PeerDiscovery", return_value=mock_discovery),
+        patch("peerq.cli.StatusServer", return_value=mock_status_server),
+    ):
+        task = asyncio.create_task(
+            run_node_command(
+                node_id="n1",
+                host="127.0.0.1",
+                port=9001,
+                peers_str="",
+                wal_path=str(tmp_path / "node.wal"),
+                enable_discovery=True,
+                discovery_port=19876,
+                status_port=9102,
+            )
+        )
+        await asyncio.sleep(0.02)
+        task.cancel()
+        await task
+
+        mock_discovery.start.assert_awaited_once()
+        mock_status_server.start.assert_awaited_once()
+        mock_discovery.stop.assert_awaited_once()
+        mock_status_server.stop.assert_awaited_once()
+
+
+def test_main_status_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(
+        sys, "argv", ["peerq", "status", "--endpoint", "http://127.0.0.1:9102/status"]
+    )
+
+    mock_resp = MagicMock()
+    mock_resp.read.return_value = b'{"node_id": "test-node", "status": "ok"}'
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        main()

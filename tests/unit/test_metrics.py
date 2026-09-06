@@ -68,3 +68,30 @@ def test_metrics_collector_counters() -> None:
     assert snap.latencies["task_latency"]["count"] == 2.0
     assert snap.latencies["task_latency"]["min"] == 1500.0
     assert snap.latencies["task_latency"]["max"] == 2500.0
+
+
+def test_histogram_sub_bucket_bits_validation() -> None:
+    with pytest.raises(ValueError, match="between 1 and 16"):
+        LogLinearHistogram(sub_bucket_bits=0)
+
+    with pytest.raises(ValueError, match="between 1 and 16"):
+        LogLinearHistogram(sub_bucket_bits=17)
+
+    hist = LogLinearHistogram()
+    # Empty histogram quantile returns 0.0
+    assert hist.quantile(-0.1) == 0.0
+    assert hist.quantile(1.1) == 0.0
+
+
+def test_metrics_collector_dynamic_metrics() -> None:
+    metrics = MetricsCollector()
+    # Custom counter
+    metrics.increment("custom_metric", 42)
+    assert metrics.get_counter("custom_metric") == 42
+    assert metrics.get_counter("nonexistent") == 0
+
+    # Custom histogram
+    assert metrics.get_histogram("custom_latency") is None
+    metrics.record_latency("custom_latency", 500.0)
+    assert metrics.get_histogram("custom_latency") is not None
+    assert metrics.get_histogram("custom_latency").count == 1  # type: ignore[union-attr]

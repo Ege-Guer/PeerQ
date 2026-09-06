@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import random
 import socket
 import struct
 from collections.abc import Callable
@@ -125,8 +126,9 @@ class SimNetwork:
     Integrates with Clock (typically SimClock) for virtual time progression.
     """
 
-    def __init__(self, clock: Clock) -> None:
+    def __init__(self, clock: Clock, rng: random.Random | None = None) -> None:
         self.clock = clock
+        self.rng = rng
         self._transports: dict[str, InMemoryTransport] = {}
         self._broadcast_transports: dict[str, SimBroadcastTransport] = {}
         # Partitions: set of (source_node, target_node) tuples blocked from communicating
@@ -181,6 +183,10 @@ class SimNetwork:
         """Route a message from source to target respecting partitions and delay."""
         if self.is_blocked(source, target):
             # Message dropped by network partition
+            return
+
+        if self.rng is not None and self.drop_rate > 0.0 and self.rng.random() < self.drop_rate:
+            # Message dropped by packet loss
             return
 
         target_transport = self._transports.get(target)

@@ -122,3 +122,36 @@ async def test_sim_clock_zero_delay_sleep() -> None:
     await task
     assert executed
     assert clock.now() == 10.0
+
+
+@pytest.mark.asyncio
+async def test_sim_clock_cancelled_sleepers_purged_on_heap_inspection() -> None:
+    clock = SimClock(10.0)
+
+    async def sleeper() -> None:
+        await clock.sleep(100.0)
+
+    task = asyncio.create_task(sleeper())
+    await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Top of heap is cancelled future: has_pending_sleepers pops it
+    assert not clock.has_pending_sleepers()
+
+    # Repeat for next_deadline
+    task2 = asyncio.create_task(sleeper())
+    await asyncio.sleep(0)
+    task2.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task2
+    assert clock.next_deadline() is None
+
+    # Repeat for step
+    task3 = asyncio.create_task(sleeper())
+    await asyncio.sleep(0)
+    task3.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task3
+    assert clock.step() is None

@@ -233,3 +233,98 @@ async def test_node_wal_crash_recovery(tmp_path: Path) -> None:
     assert recovered_task.vector_clock.get("node-1") >= 1
 
     await node1_reboot.stop()
+
+
+@pytest.mark.asyncio
+async def test_node_handler_exception_records_failure() -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("n1", net)
+    rng = random.Random(42)
+
+    async def failing_handler(payload: bytes) -> bytes:
+        raise RuntimeError("simulated task computation failure")
+
+    node = PeerNode("n1", clock, t1, rng, peers=[], handler=failing_handler)
+    await node.start()
+    await node.submit_task("fail-task", b"bad_input")
+
+    clock.advance(0.1)
+    await clock.sleep(0)
+
+    task = node.get_task("fail-task")
+    assert task is not None
+    assert task.state == TaskState.FAILED
+    assert "simulated task computation failure" in (task.error or "")
+    assert node.metrics.get_counter("failed") == 1
+
+    await node.stop()
+
+
+@pytest.mark.asyncio
+async def test_node_commit_rejected_on_lease_expiry() -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("n1", net)
+    rng = random.Random(42)
+
+    async def slow_handler(payload: bytes) -> bytes:
+        # Sleep virtual time beyond the 1.0s lease duration
+        await clock.sleep(2.0)
+        return b"late_result"
+
+    node = PeerNode("n1", clock, t1, rng, peers=[], handler=slow_handler, lease_duration=1.0)
+    await node.start()
+    await node.submit_task("slow-task", b"payload")
+
+    # Step clock to allow task to be claimed and start running
+    clock.advance(0.1)
+    await clock.sleep(0)
+    task = node.get_task("slow-task")
+    assert task is not None
+    assert task.state == TaskState.RUNNING
+
+    # Now advance clock past lease expiry: worker finishes late
+    clock.advance(2.5)
+    await clock.sleep(0)
+
+    # Stale commit should be rejected by fencing check!
+    assert node.metrics.get_counter("rejected") == 1
+    assert node.metrics.get_counter("completed") == 0
+
+    await node.stop()
+
+
+@pytest.mark.asyncio
+async def test_node_queue_full_rejection() -> None:
+    from peerq.queue import QueueFull
+
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("n1", net)
+    rng = random.Random(42)
+
+    # Worker handler doesn't consume immediately
+    async def blocking_handler(payload: bytes) -> bytes:
+        await clock.sleep(10.0)
+        return payload
+
+    node = PeerNode(
+        "n1",
+        clock,
+        t1,
+        rng,
+        peers=[],
+        handler=blocking_handler,
+        max_queue_size=1,
+    )
+    await node.start()
+
+    # First task fills queue
+    await node.submit_task("t1", b"1")
+
+    # Second task should raise QueueFull
+    with pytest.raises(QueueFull):
+        await node.submit_task("t2", b"2")
+
+    await node.stop()

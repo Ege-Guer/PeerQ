@@ -132,3 +132,20 @@ def test_safe_reclaim_under_false_suspicion() -> None:
     assert final_merged.fence_token == token_b
     assert final_merged.claimed_by == "node-b"
     assert final_merged.result == b"valid-output-from-node-b"
+
+
+def test_failure_detector_edge_cases() -> None:
+    clock = SimClock(10.0)
+    detector = PhiAccrualDetector(clock, min_samples=3)
+
+    assert not detector.is_known("p1")
+    detector.heartbeat("p1", timestamp=10.0)
+    assert detector.is_known("p1")
+
+    # Heartbeat with older timestamp (delta <= 0) should be ignored without crashing
+    detector.heartbeat("p1", timestamp=9.0)
+    detector.heartbeat("p1", timestamp=10.0)
+
+    # phi called with timestamp equal to last heartbeat (time_since_last <= 0)
+    assert detector.phi("p1", timestamp=10.0) == 0.0
+    assert detector.phi("p1", timestamp=8.0) == 0.0
