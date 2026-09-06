@@ -158,6 +158,8 @@ class PeerDiscovery:
                 data = json.loads(raw_data.decode("utf-8"))
                 remote_id = str(data["node_id"])
                 remote_host = str(data["host"])
+                if remote_host in ("0.0.0.0", "", "::") and _sender_addr:
+                    remote_host = _sender_addr[0]
                 remote_port = int(data["port"])
                 cluster_id = str(data.get("cluster_id", ""))
             except Exception:

@@ -1,0 +1,36 @@
+=================================================================
+PEERQ GOSSIP ANTI-ENTROPY CONVERGENCE BENCHMARK
+=================================================================
+Timestamp:       2026-09-06 13:56:53 UTC
+Platform:        macOS-26.5.1-arm64-arm-64bit
+Processor:       arm
+Python:          3.12.4 (CPython)
+Command line:    bench/gossip_convergence.py
+=================================================================
+Mesh Topology: 3 Nodes | 30 Distributed Tasks
+   Convergence Virtual Time: 1.50 s
+   Convergence Wall Time:    3.05 ms
+   Rounds to Convergence:    3
+   Total Messages Exchanged: 18
+   Total Volume Exchanged:   27.7 KB
+   Per-Task Convergence:     50.00 ms/task
+
+Mesh Topology: 5 Nodes | 50 Distributed Tasks
+   Convergence Virtual Time: 4.00 s
+   Convergence Wall Time:    35.08 ms
+   Rounds to Convergence:    8
+   Total Messages Exchanged: 115
+   Total Volume Exchanged:   378.7 KB
+   Per-Task Convergence:     80.00 ms/task
+
+Mesh Topology: 10 Nodes | 100 Distributed Tasks
+   Convergence Virtual Time: 4.00 s
+   Convergence Wall Time:    106.28 ms
+   Rounds to Convergence:    8
+   Total Messages Exchanged: 430
+   Total Volume Exchanged:   1,111.2 KB
+   Per-Task Convergence:     40.00 ms/task
+
+=================================================================
+PEERQ CONVERGENCE BENCHMARK COMPLETED SUCCESSFULLY
+=================================================================

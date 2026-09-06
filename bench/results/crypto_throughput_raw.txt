@@ -1,0 +1,33 @@
+=================================================================
+PEERQ ED25519 CRYPTOGRAPHIC & INTEGRITY BENCHMARK
+=================================================================
+Timestamp:       2026-09-06 13:56:41 UTC
+Platform:        macOS-26.5.1-arm64-arm-64bit
+Processor:       arm
+Python:          3.12.4 (CPython)
+Command line:    bench/crypto_throughput.py
+=================================================================
+1. Ed25519 Keypair Generation (5,000 iterations):
+   Elapsed:      0.7449 s
+   Throughput:   6,712.5 keys/sec
+
+2. Canonical Task Serialization (10,000 records):
+   Elapsed:      0.0726 s
+   Throughput:   137,732.0 records/sec (70.24 MB/sec)
+   Payload avg:  534.8 bytes/record
+
+3. Ed25519 Task Signing (10,000 signatures):
+   Elapsed:      1.6724 s
+   Throughput:   5,979.6 signs/sec
+
+4. Ed25519 Signature Verification (10,000 validations):
+   Elapsed:      3.3887 s
+   Throughput:   2,951.0 verifications/sec
+
+5. Byzantine Tamper Detection (10,000 forged tasks):
+   Elapsed:      0.0010 s
+   Throughput:   10,442,042.9 rejections/sec (100.0% rejected)
+
+=================================================================
+PEERQ CRYPTOGRAPHIC BENCHMARK COMPLETED SUCCESSFULLY
+=================================================================

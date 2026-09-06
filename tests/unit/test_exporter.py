@@ -154,15 +154,24 @@ async def test_status_server_endpoints() -> None:
         assert "cluster_topology" in data
         assert "tasks" in data
 
-        # 4. 404 Not Found
+        # 4. / and /dashboard (Web UI)
+        for path in ("/", "/dashboard"):
+            code, hdrs, body = await _http_req("GET", path)
+            assert code == 200
+            assert hdrs.get("content-type") == "text/html; charset=utf-8"
+            assert b"<!DOCTYPE html>" in body
+            assert b"PeerQ Mesh" in body
+            assert b"node-http" in body
+
+        # 5. 404 Not Found
         code, _, _ = await _http_req("GET", "/not-found-path")
         assert code == 404
 
-        # 5. 405 Method Not Allowed
+        # 6. 405 Method Not Allowed
         code, _, _ = await _http_req("POST", "/status")
         assert code == 405
 
-        # 6. Malformed HTTP request
+        # 7. Malformed HTTP request
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         writer.write(b"INVALID\r\n\r\n")
         await writer.drain()
@@ -173,3 +182,49 @@ async def test_status_server_endpoints() -> None:
         await writer.wait_closed()
     finally:
         await server.stop()
+
+
+def test_get_dashboard_html_rendering() -> None:
+    import random
+
+    from peerq.clock import SimClock
+    from peerq.consensus import FenceToken, TaskRecord, TaskState
+    from peerq.exporter import get_dashboard_html
+    from peerq.node import PeerNode
+    from peerq.transport import InMemoryTransport, SimNetwork
+
+    clock = SimClock(10.0)
+    net = SimNetwork(clock)
+    t = InMemoryTransport("dash-node", net)
+    rng = random.Random(42)
+    node = PeerNode("dash-node", clock, t, rng, peers=["peer-a", "peer-b"])
+
+    # Simulate suspected peer
+    node.failure_detector.heartbeat("peer-a", 10.0)
+    # peer-b has no heartbeats, so it will be suspected
+
+    # Add task with active lease
+    t1 = TaskRecord(
+        task_id="task-active-1",
+        state=TaskState.CLAIMED,
+        payload=b"test-payload",
+        claimed_by="dash-node",
+        fence_token=FenceToken(epoch=3, peer_id="dash-node"),
+        lease_expiry=25.0,
+    )
+    node._tasks["task-active-1"] = t1
+
+    # Record metrics & latencies
+    node.metrics.increment("enqueued", 5)
+    node.metrics.increment("claimed", 2)
+    node.metrics.record_latency("task_latency", 4200.0)  # 4.2ms
+    node.metrics.record_latency("gossip_latency", 1500.0)  # 1.5ms
+
+    html_out = get_dashboard_html(node)
+    assert "<!DOCTYPE html>" in html_out
+    assert "dash-node" in html_out
+    assert "task-active-1" in html_out
+    assert "peer-a (live)" in html_out
+    assert "peer-b (suspected)" in html_out
+    assert "4.20 ms" in html_out
+    assert "1.50 ms" in html_out

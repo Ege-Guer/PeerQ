@@ -78,6 +78,12 @@ All benchmark numbers are measured directly from committed reproducible scripts.
 | **WAL Append (Buffered)** | **60,560 records/sec** (22.9 MB/s) | 30,000 serialized & CRC32-framed TaskRecords | [`bench/results/wal_throughput_raw.txt`](bench/results/wal_throughput_raw.txt) |
 | **WAL Append (fsync)** | **16,686 fsyncs/sec** (0.060 ms/op) | Synchronous disk barrier per record | [`bench/results/wal_throughput_raw.txt`](bench/results/wal_throughput_raw.txt) |
 | **WAL Replay & Verify** | **218,024 records/sec** (82.6 MB/s) | Sequential replay with 32-bit CRC validation | [`bench/results/wal_throughput_raw.txt`](bench/results/wal_throughput_raw.txt) |
+| **Ed25519 Keygen** | **6,712.5 keys/sec** | 5,000 cryptographic keypair generations | [`bench/results/crypto_throughput_raw.txt`](bench/results/crypto_throughput_raw.txt) |
+| **Task Signing** | **5,979.6 signs/sec** | 10,000 Ed25519 task digital signatures | [`bench/results/crypto_throughput_raw.txt`](bench/results/crypto_throughput_raw.txt) |
+| **Signature Verification** | **2,951.0 verifications/sec** | 10,000 Ed25519 authentications via PeerKeyRing | [`bench/results/crypto_throughput_raw.txt`](bench/results/crypto_throughput_raw.txt) |
+| **Byzantine Rejection** | **10.44M rejections/sec** (100% caught) | Tampered payload detection before state merge | [`bench/results/crypto_throughput_raw.txt`](bench/results/crypto_throughput_raw.txt) |
+| **Gossip Convergence (3 peers)** | **1.50 s** (3 rounds, 3.05 ms wall) | 30 distributed tasks across 3-node mesh | [`bench/results/convergence_raw.txt`](bench/results/convergence_raw.txt) |
+| **Gossip Convergence (10 peers)** | **4.00 s** (8 rounds, 106.28 ms wall) | 100 distributed tasks across 10-node mesh | [`bench/results/convergence_raw.txt`](bench/results/convergence_raw.txt) |
 
 ### Reproducing Locally
 ```bash
@@ -92,6 +98,12 @@ python bench/overhead.py
 
 # Run Write-Ahead Log (WAL) throughput benchmark
 python bench/wal_throughput.py
+
+# Run Ed25519 cryptographic throughput benchmark
+python bench/crypto_throughput.py
+
+# Run gossip anti-entropy convergence benchmark
+python bench/gossip_convergence.py
 ```
 
 ---
@@ -155,6 +167,35 @@ pytest --cov=peerq --cov-report=term-missing tests/
 
 # Deterministic Simulation Suite
 pytest tests/sim/ --durations=10
+```
+
+---
+
+## Interactive Web Dashboard
+
+PeerQ includes a lightweight, real-time single-page web UI built directly into the node runtime:
+- Live cluster topology & node health status (green/amber peer status pills)
+- Task state breakdown (Submitted, Claimed, Running, Completed, Failed, Timed Out)
+- Real-time active task leases with fence epoch and remaining lease TTL
+- Vector clock logical sequence counters and peer credit flow meters
+- Embedded Prometheus counters and p50/p99 execution latency summaries
+- Accessible at `http://127.0.0.1:9102/` (or `/dashboard`)
+
+---
+
+## Container Deployment (Docker & Compose)
+
+Spin up an isolated 3-node distributed mesh with automatic UDP discovery and local WAL persistence:
+
+```bash
+# Build and boot 3-node auto-discovering cluster
+docker compose up --build
+
+# Open the live web dashboard for node-1
+open http://localhost:9102
+
+# Query node-2 dashboard
+curl http://localhost:9103/status
 ```
 
 ---

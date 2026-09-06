@@ -1,0 +1,96 @@
+services:
+  node-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: peerq-node-1
+    command:
+      - "node"
+      - "--id"
+      - "node-1"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "9001"
+      - "--discovery"
+      - "--discovery-port"
+      - "7433"
+      - "--cluster-id"
+      - "docker-mesh"
+      - "--status-port"
+      - "9102"
+      - "--wal-path"
+      - "/app/data/node1.wal"
+    ports:
+      - "9102:9102"
+    volumes:
+      - node1_data:/app/data
+    networks:
+      - peerq-mesh
+
+  node-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: peerq-node-2
+    command:
+      - "node"
+      - "--id"
+      - "node-2"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "9001"
+      - "--discovery"
+      - "--discovery-port"
+      - "7433"
+      - "--cluster-id"
+      - "docker-mesh"
+      - "--status-port"
+      - "9102"
+      - "--wal-path"
+      - "/app/data/node2.wal"
+    ports:
+      - "9103:9102"
+    volumes:
+      - node2_data:/app/data
+    networks:
+      - peerq-mesh
+
+  node-3:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: peerq-node-3
+    command:
+      - "node"
+      - "--id"
+      - "node-3"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "9001"
+      - "--discovery"
+      - "--discovery-port"
+      - "7433"
+      - "--cluster-id"
+      - "docker-mesh"
+      - "--status-port"
+      - "9102"
+      - "--wal-path"
+      - "/app/data/node3.wal"
+    ports:
+      - "9104:9102"
+    volumes:
+      - node3_data:/app/data
+    networks:
+      - peerq-mesh
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:
+
+networks:
+  peerq-mesh:
+    driver: bridge
