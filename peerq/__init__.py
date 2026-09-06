@@ -20,6 +20,15 @@ from peerq.consensus import (
     VectorClock,
     merge_records,
 )
+from peerq.crypto import (
+    Ed25519KeyPair,
+    Ed25519PublicKeyWrapper,
+    PeerKeyRing,
+    sign_task,
+    verify_task_authorization,
+    verify_task_signature,
+)
+from peerq.discovery import DiscoveredPeer, PeerDiscovery
 from peerq.exporter import format_prometheus_text
 from peerq.failure import PhiAccrualDetector
 from peerq.metrics import LogLinearHistogram, MetricsCollector
@@ -67,4 +76,12 @@ __all__ = [
     "RECORD_TASK",
     "RECORD_CLOCK",
     "RECORD_CHECKPOINT",
+    "PeerDiscovery",
+    "DiscoveredPeer",
+    "Ed25519KeyPair",
+    "Ed25519PublicKeyWrapper",
+    "PeerKeyRing",
+    "sign_task",
+    "verify_task_signature",
+    "verify_task_authorization",
 ]

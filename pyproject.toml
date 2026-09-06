@@ -23,7 +23,9 @@ classifiers = [
     "Topic :: System :: Distributed Computing",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    "cryptography>=42.0.0",
+]
 
 [project.optional-dependencies]
 dev = [

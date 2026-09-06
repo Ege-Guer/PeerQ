@@ -13,7 +13,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from peerq.crypto import PeerKeyRing
 
 
 class ClockComparison(Enum):
@@ -141,6 +144,8 @@ class TaskRecord:
     lease_expiry: float = 0.0
     vector_clock: VectorClock = VectorClock()
     updated_by: str = ""
+    signature: bytes | None = None
+    signer_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -154,11 +159,16 @@ class TaskRecord:
             "lease_expiry": self.lease_expiry,
             "vector_clock": self.vector_clock.clock,
             "updated_by": self.updated_by,
+            "signature": self.signature.hex() if self.signature is not None else None,
+            "signer_id": self.signer_id,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskRecord:
         ft = data["fence_token"]
+        sig_hex = data.get("signature")
+        signature = bytes.fromhex(sig_hex) if sig_hex is not None else None
+        signer_id = data.get("signer_id")
         return cls(
             task_id=data["task_id"],
             state=TaskState(data["state"]),
@@ -170,6 +180,8 @@ class TaskRecord:
             lease_expiry=float(data["lease_expiry"]),
             vector_clock=VectorClock(data["vector_clock"]),
             updated_by=data["updated_by"],
+            signature=signature,
+            signer_id=signer_id,
         )
 
 
@@ -185,6 +197,8 @@ def _record_lattice_key(
     tuple[int, str],
     bytes,
     float,
+    tuple[int, bytes],
+    tuple[int, str],
 ]:
     """
     Strict total ordering key for TaskRecords.
@@ -200,6 +214,8 @@ def _record_lattice_key(
     claimed_tuple = (0, "") if r.claimed_by is None else (1, r.claimed_by)
     result_tuple = (0, b"") if r.result is None else (1, r.result)
     error_tuple = (0, "") if r.error is None else (1, r.error)
+    sig_tuple = (0, b"") if r.signature is None else (1, r.signature)
+    signer_tuple = (0, "") if r.signer_id is None else (1, r.signer_id)
 
     return (
         terminal_flag,
@@ -211,10 +227,16 @@ def _record_lattice_key(
         error_tuple,
         r.payload,
         r.lease_expiry,
+        sig_tuple,
+        signer_tuple,
     )
 
 
-def merge_records(r1: TaskRecord, r2: TaskRecord) -> TaskRecord:
+def merge_records(
+    r1: TaskRecord,
+    r2: TaskRecord,
+    keyring: PeerKeyRing | None = None,
+) -> TaskRecord:
     """
     CRDT join-semilattice merge for replicated task records.
 
@@ -222,9 +244,25 @@ def merge_records(r1: TaskRecord, r2: TaskRecord) -> TaskRecord:
     - Commutative: merge(r1, r2) == merge(r2, r1)
     - Associative: merge(r1, merge(r2, r3)) == merge(merge(r1, r2), r3)
     - Idempotent: merge(r, r) == r
+    - Byzantine resistance: If keyring is supplied, untrusted or forged records
+      are rejected in favor of verified authorized records.
     """
     if r1.task_id != r2.task_id:
         raise ValueError(f"Cannot merge records for different tasks: {r1.task_id} vs {r2.task_id}")
+
+    if keyring is not None:
+        from peerq.crypto import verify_task_authorization
+
+        valid1 = verify_task_authorization(r1, keyring)
+        valid2 = verify_task_authorization(r2, keyring)
+        if valid1 and not valid2:
+            return r1
+        if valid2 and not valid1:
+            return r2
+        if not valid1 and not valid2:
+            raise ValueError(
+                f"Neither record is cryptographically authorized for task {r1.task_id}"
+            )
 
     # Determine winning state record via strict lattice key
     k1 = _record_lattice_key(r1)
