@@ -463,5 +463,3 @@ async def test_node_reclaim_without_handler_resets_to_pending() -> None:
     assert rec_client.lease_expiry == 0.0
 
     await client.stop()
-
-

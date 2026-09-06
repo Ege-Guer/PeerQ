@@ -69,7 +69,7 @@ class PeerNode:
         rng: random.Random,
         peers: list[str],
         handler: TaskHandler | None = None,
-        lease_duration: float = 5.0,
+        lease_duration: float | None = 5.0,
         heartbeat_interval: float = 1.0,
         gossip_interval: float = 0.5,
         reclaim_interval: float = 1.0,
@@ -86,10 +86,8 @@ class PeerNode:
         if lease_duration is None or lease_duration == 5.0:
             env_lease = os.environ.get("PEERQ_LEASE_DURATION")
             if env_lease:
-                try:
+                with contextlib.suppress(ValueError):
                     lease_duration = float(env_lease)
-                except ValueError:
-                    pass
         if lease_duration is None:
             lease_duration = 5.0
         self.lease_duration = lease_duration
@@ -315,17 +313,13 @@ class PeerNode:
             self._vector_clock = self._vector_clock.increment(self.node_id)
             task_lease_duration = self.lease_duration
             if isinstance(record.payload, bytes):
-                try:
+                with contextlib.suppress(Exception):
                     payload_obj = json.loads(record.payload.decode("utf-8"))
                     if isinstance(payload_obj, dict) and "lease_duration" in payload_obj:
                         task_lease_duration = float(payload_obj["lease_duration"])
-                except Exception:
-                    pass
             elif isinstance(record.payload, dict) and "lease_duration" in record.payload:
-                try:
+                with contextlib.suppress(Exception):
                     task_lease_duration = float(record.payload["lease_duration"])
-                except Exception:
-                    pass
             lease_exp = self.clock.now() + task_lease_duration
 
             claimed_record = TaskRecord(
@@ -441,7 +435,7 @@ class PeerNode:
                                         self._queue.put_nowait(task_id, priority=10)
                                         self._queued_task_ids.add(task_id)
                             else:
-                                # Reclaimer has no local worker handler: release task back to PENDING
+                                # Reclaimer without local worker: release task back to PENDING
                                 self._vector_clock = self._vector_clock.increment(self.node_id)
                                 new_token = record.fence_token.next_for(self.node_id)
                                 reset_record = TaskRecord(

@@ -3,6 +3,7 @@ Unit tests for peerq.discovery (Dynamic peer discovery).
 """
 
 import random
+from typing import Any
 
 import pytest
 
@@ -291,9 +292,17 @@ async def test_discovery_sender_addr_formats() -> None:
     await d1.start()
 
     # Sender as string IP
-    b1.deliver("192.168.1.100", b'{"node_id": "n2", "host": "0.0.0.0", "port": 9002, "cluster_id": "peerq-default"}')
-    # Sender as tuple (ip, port)
-    b1._inbox.put_nowait((("192.168.1.200", 9003), b'{"node_id": "n3", "host": "0.0.0.0", "port": 9003, "cluster_id": "peerq-default"}'))
+    payload_n2 = (
+        b'{"node_id": "n2", "host": "0.0.0.0", "port": 9002, "cluster_id": "peerq-default"}'
+    )
+    b1.deliver("192.168.1.100", payload_n2)
+
+    # Sender as tuple (ip, port) to verify tuple sender unpacking
+    payload_n3 = (
+        b'{"node_id": "n3", "host": "0.0.0.0", "port": 9003, "cluster_id": "peerq-default"}'
+    )
+    tuple_item: Any = (("192.168.1.200", 9003), payload_n3)
+    b1._inbox.put_nowait(tuple_item)
 
     clock.advance(0.1)
     await clock.sleep(0)
@@ -303,4 +312,3 @@ async def test_discovery_sender_addr_formats() -> None:
     assert peers.get("n3") == ("192.168.1.200", 9003)
 
     await d1.stop()
-
