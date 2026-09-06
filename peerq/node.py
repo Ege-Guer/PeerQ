@@ -435,7 +435,24 @@ class PeerNode:
                         elected = _rendezvous_reclaimer(task_id, live_peers)
                         if elected == self.node_id:
                             self.metrics.increment("reclaimed")
-                            if task_id not in self._queued_task_ids:
-                                with contextlib.suppress(QueueFull):
-                                    self._queue.put_nowait(task_id, priority=10)
-                                    self._queued_task_ids.add(task_id)
+                            if self.handler is not None:
+                                if task_id not in self._queued_task_ids:
+                                    with contextlib.suppress(QueueFull):
+                                        self._queue.put_nowait(task_id, priority=10)
+                                        self._queued_task_ids.add(task_id)
+                            else:
+                                # Reclaimer has no local worker handler: release task back to PENDING
+                                self._vector_clock = self._vector_clock.increment(self.node_id)
+                                new_token = record.fence_token.next_for(self.node_id)
+                                reset_record = TaskRecord(
+                                    task_id=task_id,
+                                    state=TaskState.PENDING,
+                                    payload=record.payload,
+                                    claimed_by=None,
+                                    fence_token=new_token,
+                                    lease_expiry=0.0,
+                                    vector_clock=self._vector_clock,
+                                    updated_by=self.node_id,
+                                )
+                                self._tasks[task_id] = reset_record
+                                await self._broadcast_task_update(task_id, reset_record)

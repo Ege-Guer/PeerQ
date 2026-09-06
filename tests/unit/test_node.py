@@ -389,3 +389,79 @@ def test_node_env_lease_duration(monkeypatch: pytest.MonkeyPatch) -> None:
     node = PeerNode("n1", clock, t1, rng, peers=[])
     assert node.lease_duration == 45.0
 
+
+@pytest.mark.asyncio
+async def test_node_reclaim_without_handler_resets_to_pending() -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("node-client", net)
+    t2 = InMemoryTransport("node-worker", net)
+    rng1 = random.Random(301)
+    rng2 = random.Random(302)
+
+    async def hanging_worker(payload: bytes) -> bytes:
+        await clock.sleep(100.0)
+        return payload
+
+    # Client has no handler (like PC), Worker has hanging handler (like Mac)
+    client = PeerNode(
+        "node-client",
+        clock,
+        t1,
+        rng1,
+        peers=["node-worker"],
+        handler=None,
+        lease_duration=2.0,
+        heartbeat_interval=0.5,
+        reclaim_interval=0.5,
+    )
+    worker = PeerNode(
+        "node-worker",
+        clock,
+        t2,
+        rng2,
+        peers=["node-client"],
+        handler=hanging_worker,
+        lease_duration=2.0,
+        heartbeat_interval=0.5,
+        reclaim_interval=0.5,
+    )
+
+    await client.start()
+    await worker.start()
+
+    for _ in range(10):
+        clock.advance(0.5)
+        await clock.sleep(0)
+
+    # Worker submits and claims task
+    await worker.submit_task("t-orphan", b"data")
+    clock.advance(0.1)
+    await clock.sleep(0)
+
+    rec = worker.get_task("t-orphan")
+    assert rec is not None
+    assert rec.claimed_by == "node-worker"
+
+    # Gossip claim to client
+    clock.advance(0.5)
+    await clock.sleep(0)
+
+    # Worker crashes hard
+    await worker.stop()
+
+    # Advance time: worker heartbeats stop, lease expires, client reclaims
+    for _ in range(25):
+        clock.advance(0.5)
+        await clock.sleep(0)
+
+    # Client (without handler) must have reclaimed and reset task to PENDING with claimed_by=None
+    rec_client = client.get_task("t-orphan")
+    assert rec_client is not None
+    assert rec_client.state == TaskState.PENDING
+    assert rec_client.claimed_by is None
+    assert rec_client.lease_expiry == 0.0
+
+    await client.stop()
+
+
