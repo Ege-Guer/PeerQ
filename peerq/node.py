@@ -32,6 +32,12 @@ from peerq.failure import PhiAccrualDetector
 from peerq.metrics import MetricsCollector
 from peerq.queue import BackpressurePriorityQueue, CreditFlowController, QueueFull
 from peerq.transport import Message, Transport
+from peerq.wal import (
+    RECORD_CHECKPOINT,
+    RECORD_CLOCK,
+    RECORD_TASK,
+    WriteAheadLog,
+)
 
 TaskHandler = Callable[[bytes], Awaitable[bytes]]
 
@@ -67,6 +73,7 @@ class PeerNode:
         reclaim_interval: float = 1.0,
         max_queue_size: int = 1000,
         initial_credits: int = 20,
+        wal: WriteAheadLog | None = None,
     ) -> None:
         self.node_id = node_id
         self.clock = clock
@@ -78,6 +85,7 @@ class PeerNode:
         self.heartbeat_interval = heartbeat_interval
         self.gossip_interval = gossip_interval
         self.reclaim_interval = reclaim_interval
+        self.wal = wal
 
         # Local state
         self._tasks: dict[str, TaskRecord] = {}
@@ -104,6 +112,38 @@ class PeerNode:
     def all_tasks(self) -> dict[str, TaskRecord]:
         return dict(self._tasks)
 
+    def _recover_from_wal(self) -> None:
+        """Reconstruct local task state and vector clock from durable WAL."""
+        if self.wal is None:
+            return
+        for rec in self.wal.replay():
+            if rec.record_type == RECORD_TASK:
+                task = TaskRecord.from_dict(rec.payload)
+                if task.task_id not in self._tasks:
+                    self._tasks[task.task_id] = task
+                else:
+                    self._tasks[task.task_id] = merge_records(self._tasks[task.task_id], task)
+            elif rec.record_type == RECORD_CLOCK:
+                self._vector_clock = self._vector_clock.merge(VectorClock(rec.payload))
+            elif rec.record_type == RECORD_CHECKPOINT:
+                raw_tasks: dict[str, Any] = rec.payload.get("tasks", {})
+                for tid, tdict in raw_tasks.items():
+                    snap_task = TaskRecord.from_dict(tdict)
+                    if tid not in self._tasks:
+                        self._tasks[tid] = snap_task
+                    else:
+                        self._tasks[tid] = merge_records(self._tasks[tid], snap_task)
+                self._vector_clock = self._vector_clock.merge(
+                    VectorClock(rec.payload.get("vector_clock", {}))
+                )
+
+        # Re-enqueue any recovered tasks that remain pending
+        for tid, task in self._tasks.items():
+            if task.state == TaskState.PENDING and tid not in self._queued_task_ids:
+                with contextlib.suppress(QueueFull):
+                    self._queue.put_nowait(tid, priority=0)
+                    self._queued_task_ids.add(tid)
+
     async def submit_task(self, task_id: str, payload: bytes, priority: int = 0) -> None:
         """Submit a new task into the mesh from this peer."""
         self._vector_clock = self._vector_clock.increment(self.node_id)
@@ -117,6 +157,9 @@ class PeerNode:
         )
         self._tasks[task_id] = record
         self.metrics.increment("enqueued")
+        if self.wal is not None:
+            self.wal.append_task(record)
+            self.wal.append_clock(self._vector_clock)
 
         try:
             await self._queue.put(task_id, priority=priority)
@@ -130,6 +173,9 @@ class PeerNode:
         if self._running:
             return
         self._running = True
+
+        if self.wal is not None:
+            self._recover_from_wal()
 
         self._bg_tasks = [
             asyncio.create_task(self._recv_loop()),
@@ -148,6 +194,8 @@ class PeerNode:
             with contextlib.suppress(asyncio.CancelledError):
                 await t
         self._bg_tasks.clear()
+        if self.wal is not None:
+            self.wal.close()
         await self.transport.close()
 
     async def _recv_loop(self) -> None:
@@ -189,6 +237,9 @@ class PeerNode:
                                 self._queued_task_ids.add(task_id)
 
                     self._vector_clock = self._vector_clock.merge(remote_rec.vector_clock)
+                    if self.wal is not None:
+                        self.wal.append_task(self._tasks[task_id])
+                        self.wal.append_clock(self._vector_clock)
 
             elif msg.msg_type == "credit":
                 amount = int(msg.payload.get("amount", 1))
@@ -216,6 +267,9 @@ class PeerNode:
 
     async def _broadcast_task_update(self, task_id: str, record: TaskRecord) -> None:
         """Immediately broadcast a task state change to all peers."""
+        if self.wal is not None:
+            self.wal.append_task(record)
+            self.wal.append_clock(self._vector_clock)
         msg = Message("gossip", self.node_id, {"tasks": {task_id: record.to_dict()}})
         for peer in self.peers:
             with contextlib.suppress(Exception):

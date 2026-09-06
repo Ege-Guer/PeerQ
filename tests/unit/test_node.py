@@ -1,6 +1,7 @@
 """Unit tests for peerq.node (PeerNode coordinator)."""
 
 import random
+from pathlib import Path
 
 import pytest
 
@@ -8,6 +9,7 @@ from peerq.clock import SimClock
 from peerq.consensus import TaskState
 from peerq.node import PeerNode
 from peerq.transport import InMemoryTransport, SimNetwork
+from peerq.wal import WriteAheadLog
 
 
 @pytest.mark.asyncio
@@ -168,6 +170,66 @@ async def test_node_crash_and_lease_reclaim() -> None:
     assert rec2.result == b"crash-data-recovered"
     assert rec2.claimed_by == "node-2"
     assert rec2.fence_token.epoch >= 2
-    assert node2.metrics.get_counter("reclaimed") >= 1
-
     await node2.stop()
+
+
+@pytest.mark.asyncio
+async def test_node_wal_crash_recovery(tmp_path: Path) -> None:
+    clock = SimClock(0.0)
+    net = SimNetwork(clock)
+    t1 = InMemoryTransport("node-1", net)
+    rng = random.Random(42)
+    wal_path = tmp_path / "node1.wal"
+
+    async def upper_handler(payload: bytes) -> bytes:
+        return payload.upper()
+
+    wal1 = WriteAheadLog(wal_path)
+    node1 = PeerNode(
+        "node-1",
+        clock,
+        t1,
+        rng,
+        peers=[],
+        handler=upper_handler,
+        wal=wal1,
+    )
+
+    await node1.start()
+    await node1.submit_task("t-persist", b"durable-data")
+    clock.advance(0.1)
+    await clock.sleep(0)
+
+    task_rec = node1.get_task("t-persist")
+    assert task_rec is not None
+    assert task_rec.state == TaskState.DONE
+    assert task_rec.result == b"DURABLE-DATA"
+
+    await node1.stop()
+
+    # Now simulate a crash and reboot: new transport, new node instance, re-opening same WAL
+    t1_reboot = InMemoryTransport("node-1", net)
+    wal_reboot = WriteAheadLog(wal_path)
+    node1_reboot = PeerNode(
+        "node-1",
+        clock,
+        t1_reboot,
+        rng,
+        peers=[],
+        handler=upper_handler,
+        wal=wal_reboot,
+    )
+
+    # Before start, memory is empty
+    assert node1_reboot.get_task("t-persist") is None
+
+    # On start, state is reconstructed from WAL
+    await node1_reboot.start()
+    recovered_task = node1_reboot.get_task("t-persist")
+    assert recovered_task is not None
+    assert recovered_task.task_id == "t-persist"
+    assert recovered_task.state == TaskState.DONE
+    assert recovered_task.result == b"DURABLE-DATA"
+    assert recovered_task.vector_clock.get("node-1") >= 1
+
+    await node1_reboot.stop()

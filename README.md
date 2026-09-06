@@ -46,8 +46,7 @@ Peer A (Submitter/Worker)         Peer B (Peer/Reclaimer)
 | Failure Mode | What is Guaranteed | What is NOT Guaranteed |
 | :--- | :--- | :--- |
 | **Worker Crash mid-task** | Lease expires; task is automatically reclaimed by surviving peers with an incremented fencing token. No task is dropped. | Exactly-once execution is not guaranteed; partial work performed before the crash cannot be rolled back by the mesh. |
-| **Peer Crash (Idle/Submitter)** | Cluster topology adapts via φ-accrual detector; gossip mesh converges on surviving peers. | In-memory queues of the dead peer are unavailable until restart. |
-| **Full-Cluster Crash** | Clean deterministic restart if state is loaded from persistent storage. | In-memory state in v1 is volatile; tasks not persisted externally are lost if all nodes crash simultaneously. |
+| **Full-Cluster Crash** | Clean deterministic restart and state recovery when Write-Ahead Log (`peerq.wal`) is enabled. | In pure in-memory mode (`wal=None`), tasks are lost if all nodes crash simultaneously. |
 | **Symmetric Partition** | Both partitions continue processing local workloads independently. On heal, CRDT join-semilattice merges states deterministically. | Partitions cannot observe each other's state in real time. Concurrent claims resolve to the higher fencing token upon healing. |
 | **Asymmetric Partition (A hears B, B does not hear A)** | Asymmetric failure detection adapts via one-way φ-accrual suspicion; gossip propagates along directed reachable paths ($A \to C \to B$). | Direct point-to-point acknowledgment from the blind node is delayed until multi-hop gossip propagates. |
 
@@ -109,6 +108,7 @@ Key architectural decisions and trade-offs are documented under [`docs/adr/`](do
 - [ADR 0002: At-Least-Once Delivery Semantics and the Fallacy of Exactly-Once](docs/adr/0002-at-least-once-vs-exactly-once.md)
 - [ADR 0003: Leaderless Gossip Mesh vs. Raft-Replicated Broker](docs/adr/0003-leaderless-gossip-vs-raft-broker.md)
 - [ADR 0004: Adaptive φ-Accrual vs. Fixed-Timeout Failure Detection](docs/adr/0004-phi-accrual-vs-fixed-timeout.md)
+- [ADR 0005: Write-Ahead Log (WAL) and Crash-Recovery State Replay](docs/adr/0005-write-ahead-log-and-crash-recovery.md)
 
 ---
 

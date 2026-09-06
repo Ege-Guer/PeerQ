@@ -4,10 +4,11 @@ In accordance with our non-negotiable honesty rules, this document explicitly re
 
 ---
 
-## 1. No Persistent Disk Storage (In-Memory Only in v1)
-`peerq` v1 is an in-memory async task mesh. Task states, vector clocks, and queues are maintained in process memory.
-- **Consequence**: If the entire cluster is stopped or crashes simultaneously, all in-flight and pending tasks are lost.
-- **Scope**: Designed for transient task distribution, cache-warming, distributed web crawling, and background jobs where tasks can be re-submitted if the cluster restarts. Persistent durability requires an external durable storage layer or a future disk WAL ADR.
+## 1. Optional Durability via Write-Ahead Log (`peerq.wal`)
+`peerq` provides crash-recovery durability through an append-only binary Write-Ahead Log (`peerq.wal.WriteAheadLog`, see [ADR 0005](docs/adr/0005-write-ahead-log-and-crash-recovery.md)).
+- **With WAL enabled**: Nodes journal state transitions (task admissions, worker claims, result commits, and vector clocks) to disk framed by 32-bit CRC checksums. On reboot, nodes replay the journal to reconstruct state and re-enqueue pending tasks. Unclean crash boundaries with partial torn writes are gracefully isolated.
+- **Without WAL (default)**: If initialized without a WAL (`wal=None`), nodes operate in pure in-memory mode for transient workloads (e.g. cache warming, ephemeral scrapers), where process termination resets local state.
+
 
 ## 2. Strictly At-Least-Once Delivery
 - `peerq` guarantees at-least-once execution. It does **NOT** provide exactly-once execution.

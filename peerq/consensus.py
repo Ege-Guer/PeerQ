@@ -77,6 +77,10 @@ class VectorClock:
             return ClockComparison.AFTER
         return ClockComparison.CONCURRENT
 
+    def to_dict(self) -> dict[str, int]:
+        """Return raw mapping of non-zero peer counters."""
+        return dict(self.clock)
+
 
 class TaskState(Enum):
     PENDING = "pending"
