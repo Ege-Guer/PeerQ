@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import socket
 import struct
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
@@ -58,6 +59,23 @@ class Transport(Protocol):
 
     async def close(self) -> None:
         """Close transport and release all associated network resources."""
+        ...
+
+
+@runtime_checkable
+class BroadcastTransport(Protocol):
+    """Protocol for broadcast/multicast beacon discovery transport."""
+
+    async def send_broadcast(self, data: bytes) -> None:
+        """Broadcast data packet to the local network."""
+        ...
+
+    async def recv_broadcast(self) -> tuple[str, bytes]:
+        """Receive the next incoming broadcast packet as (sender_address, data)."""
+        ...
+
+    async def close(self) -> None:
+        """Close broadcast transport."""
         ...
 
 
@@ -109,6 +127,7 @@ class SimNetwork:
     def __init__(self, clock: Clock) -> None:
         self.clock = clock
         self._transports: dict[str, InMemoryTransport] = {}
+        self._broadcast_transports: dict[str, SimBroadcastTransport] = {}
         # Partitions: set of (source_node, target_node) tuples blocked from communicating
         self._blocked_links: set[tuple[str, str]] = set()
         self.drop_rate: float = 0.0
@@ -119,6 +138,20 @@ class SimNetwork:
 
     def unregister(self, node_id: str) -> None:
         self._transports.pop(node_id, None)
+
+    def register_broadcast(self, node_id: str, transport: SimBroadcastTransport) -> None:
+        self._broadcast_transports[node_id] = transport
+
+    def unregister_broadcast(self, node_id: str) -> None:
+        self._broadcast_transports.pop(node_id, None)
+
+    async def deliver_broadcast(self, sender: str, data: bytes) -> None:
+        for target, transport in list(self._broadcast_transports.items()):
+            if target == sender:
+                continue
+            if self.is_blocked(sender, target):
+                continue
+            transport.deliver(sender, data)
 
     def partition(self, group_a: set[str], group_b: set[str], symmetric: bool = True) -> None:
         """Create a network partition between two groups of nodes."""
@@ -262,3 +295,121 @@ class TcpTransport:
             self._server.close()
             with contextlib.suppress(Exception):
                 await self._server.wait_closed()
+
+
+class SimBroadcastTransport:
+    """In-memory simulated broadcast transport for deterministic discovery testing."""
+
+    def __init__(self, node_id: str, network: SimNetwork) -> None:
+        self.node_id = node_id
+        self.network = network
+        self._inbox: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
+        self.network.register_broadcast(node_id, self)
+
+    async def send_broadcast(self, data: bytes) -> None:
+        await self.network.deliver_broadcast(self.node_id, data)
+
+    async def recv_broadcast(self) -> tuple[str, bytes]:
+        return await self._inbox.get()
+
+    def deliver(self, sender: str, data: bytes) -> None:
+        self._inbox.put_nowait((sender, data))
+
+    async def close(self) -> None:
+        self.network.unregister_broadcast(self.node_id)
+
+
+class _UdpProtocol(asyncio.DatagramProtocol):
+    def __init__(self, inbox: asyncio.Queue[tuple[str, bytes]]) -> None:
+        self.inbox = inbox
+
+    def datagram_received(self, data: bytes, addr: tuple[str, int]) -> None:
+        self.inbox.put_nowait((addr[0], data))
+
+    def error_received(self, exc: Exception) -> None:
+        pass
+
+
+class UdpBroadcastTransport:
+    """
+    Production asyncio UDP broadcast/multicast transport.
+    Supports subnet broadcast (SO_BROADCAST) and multicast groups (RFC 2365/mDNS).
+    """
+
+    def __init__(self, port: int = 19876, broadcast_addr: str = "239.255.42.99") -> None:
+        self.port = port
+        self.broadcast_addr = broadcast_addr
+        self._sock: socket.socket | None = None
+        self._inbox: asyncio.Queue[tuple[str, bytes]] = asyncio.Queue()
+        self._transport: asyncio.DatagramTransport | None = None
+
+    @staticmethod
+    def _is_multicast(ip: str) -> bool:
+        try:
+            first_octet = int(ip.split(".")[0])
+            return 224 <= first_octet <= 239
+        except (ValueError, IndexError):
+            return False
+
+    async def start(self) -> None:
+        loop = asyncio.get_running_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if hasattr(socket, "SO_REUSEPORT"):
+            with contextlib.suppress(Exception):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+
+        if self._is_multicast(self.broadcast_addr):
+            with contextlib.suppress(Exception):
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 1)
+            with contextlib.suppress(Exception):
+                sock.setsockopt(
+                    socket.IPPROTO_IP,
+                    socket.IP_MULTICAST_IF,
+                    socket.inet_aton("127.0.0.1"),
+                )
+            sock.bind(("", self.port))
+            with contextlib.suppress(Exception):
+                mreq = struct.pack(
+                    "4s4s",
+                    socket.inet_aton(self.broadcast_addr),
+                    socket.inet_aton("127.0.0.1"),
+                )
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            with contextlib.suppress(Exception):
+                mreq_any = struct.pack(
+                    "4sl",
+                    socket.inet_aton(self.broadcast_addr),
+                    socket.INADDR_ANY,
+                )
+                sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq_any)
+        else:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.bind(("", self.port))
+
+        sock.setblocking(False)
+        self._sock = sock
+        transport, _ = await loop.create_datagram_endpoint(
+            lambda: _UdpProtocol(self._inbox),
+            sock=sock,
+        )
+        self._transport = transport
+        if self.port == 0:
+            sock_name = sock.getsockname()
+            if isinstance(sock_name, tuple) and len(sock_name) >= 2:
+                self.port = int(sock_name[1])
+
+    async def send_broadcast(self, data: bytes) -> None:
+        if self._transport is not None:
+            self._transport.sendto(data, (self.broadcast_addr, self.port))
+
+    async def recv_broadcast(self) -> tuple[str, bytes]:
+        return await self._inbox.get()
+
+    async def close(self) -> None:
+        if self._transport is not None:
+            self._transport.close()
+            self._transport = None
+        if self._sock is not None:
+            self._sock.close()
+            self._sock = None
