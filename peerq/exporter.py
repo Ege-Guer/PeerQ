@@ -7,10 +7,15 @@ quantiles into Prometheus text exposition format (version 0.0.4).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from typing import TYPE_CHECKING, Any
+
+from peerq.consensus import TaskState
+from peerq.transport import HttpServer
 
 if TYPE_CHECKING:
     from peerq.metrics import MetricsCollector
+    from peerq.node import PeerNode
 
 CONTENT_TYPE_PROMETHEUS: str = "text/plain; version=0.0.4; charset=utf-8"
 
@@ -75,3 +80,105 @@ def format_prometheus_text(collector: MetricsCollector, node_id: str = "") -> st
 
     lines.append("")  # trailing newline required by Prometheus exposition standard
     return "\n".join(lines)
+
+
+def format_cluster_status(node: PeerNode) -> dict[str, Any]:
+    """
+    Format internal node and cluster state into a JSON-serializable dictionary.
+    Includes topology (known, live, suspected peers), queue depth, task counts by state,
+    active task leases, and vector clock state.
+    """
+    now = node.clock.now()
+    tasks = node.all_tasks()
+
+    live_peers: list[str] = []
+    suspected_peers: list[str] = []
+    for peer in node.peers:
+        if node.failure_detector.is_suspected(peer, timestamp=now):
+            suspected_peers.append(peer)
+        else:
+            live_peers.append(peer)
+
+    by_state: dict[str, int] = {state.value: 0 for state in TaskState}
+    active_leases: list[dict[str, Any]] = []
+
+    for t in tasks.values():
+        by_state[t.state.value] = by_state.get(t.state.value, 0) + 1
+        if t.state in (TaskState.CLAIMED, TaskState.RUNNING):
+            active_leases.append(
+                {
+                    "task_id": t.task_id,
+                    "claimed_by": t.claimed_by,
+                    "fence_epoch": t.fence_token.epoch,
+                    "fence_peer": t.fence_token.peer_id,
+                    "lease_expiry": t.lease_expiry,
+                }
+            )
+
+    credits: dict[str, int] = {}
+    for peer in node.peers:
+        credits[peer] = node.flow_controller.get_credits(peer)
+
+    return {
+        "node_id": node.node_id,
+        "cluster_topology": {
+            "known_peers": list(node.peers),
+            "live_peers": live_peers,
+            "suspected_peers": suspected_peers,
+        },
+        "queue": {
+            "depth": node._queue.qsize(),
+            "peer_credits": credits,
+        },
+        "tasks": {
+            "total": len(tasks),
+            "by_state": by_state,
+            "active_leases": active_leases,
+        },
+        "vector_clock": node._vector_clock.to_dict(),
+    }
+
+
+class StatusServer:
+    """
+    Lightweight HTTP dashboard and status endpoint for peerq.
+    Pure asyncio HTTP without third-party frameworks.
+
+    Endpoints:
+    - /metrics: Prometheus text exposition format (counters + latency summaries)
+    - /status: JSON payload describing topology, task states, leases, and queues
+    - /healthz: Liveness check returning 200 OK
+    """
+
+    def __init__(self, node: PeerNode, host: str = "127.0.0.1", port: int = 9102) -> None:
+        self.node = node
+        self.host = host
+        self.port = port
+        self._server = HttpServer(host, port, self._handle_request)
+
+    def _handle_request(self, method: str, path: str) -> tuple[int, str, bytes]:
+        if method != "GET":
+            return 405, "text/plain", b"Method Not Allowed\n"
+
+        if path == "/metrics":
+            text = format_prometheus_text(self.node.metrics, self.node.node_id)
+            return 200, CONTENT_TYPE_PROMETHEUS, text.encode("utf-8")
+
+        if path == "/status":
+            data = format_cluster_status(self.node)
+            body = json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+            return 200, "application/json", body
+
+        if path == "/healthz":
+            return 200, "text/plain", b"OK\n"
+
+        return 404, "text/plain", b"Not Found\n"
+
+    async def start(self) -> None:
+        """Start the status HTTP server."""
+        await self._server.start()
+        self.port = self._server.port
+
+    async def stop(self) -> None:
+        """Stop the status HTTP server."""
+        await self._server.stop()

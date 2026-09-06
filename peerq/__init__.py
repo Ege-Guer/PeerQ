@@ -29,12 +29,18 @@ from peerq.crypto import (
     verify_task_signature,
 )
 from peerq.discovery import DiscoveredPeer, PeerDiscovery
-from peerq.exporter import format_prometheus_text
+from peerq.exporter import StatusServer, format_cluster_status, format_prometheus_text
 from peerq.failure import PhiAccrualDetector
 from peerq.metrics import LogLinearHistogram, MetricsCollector
 from peerq.node import PeerNode
 from peerq.queue import BackpressurePriorityQueue, CreditFlowController, QueueFull
-from peerq.transport import InMemoryTransport, Message, TcpTransport, Transport
+from peerq.transport import (
+    HttpServer,
+    InMemoryTransport,
+    Message,
+    TcpTransport,
+    Transport,
+)
 from peerq.wal import (
     RECORD_CHECKPOINT,
     RECORD_CLOCK,
@@ -84,4 +90,7 @@ __all__ = [
     "sign_task",
     "verify_task_signature",
     "verify_task_authorization",
+    "HttpServer",
+    "StatusServer",
+    "format_cluster_status",
 ]

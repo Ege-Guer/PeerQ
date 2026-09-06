@@ -13,6 +13,7 @@ import contextlib
 import json
 import socket
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
@@ -413,3 +414,81 @@ class UdpBroadcastTransport:
         if self._sock is not None:
             self._sock.close()
             self._sock = None
+
+
+class HttpServer:
+    """
+    Lightweight standard-library HTTP server for metrics and health inspection.
+    Implemented purely using asyncio.start_server and stream readers/writers.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        handler: Callable[[str, str], tuple[int, str, bytes]],
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.handler = handler
+        self._server: asyncio.Server | None = None
+        self._closed = False
+
+    async def start(self) -> None:
+        """Start HTTP server listening on host and port."""
+        self._server = await asyncio.start_server(self._handle_client, self.host, self.port)
+        if self._server.sockets:
+            sock_name = self._server.sockets[0].getsockname()
+            if isinstance(sock_name, tuple) and len(sock_name) >= 2:
+                self.port = int(sock_name[1])
+
+    async def _handle_client(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        try:
+            line_bytes = await reader.readline()
+            if not line_bytes:
+                return
+            req_line = line_bytes.decode("utf-8", errors="replace").strip()
+            parts = req_line.split()
+            if len(parts) < 2:
+                status, ctype, body = 400, "text/plain", b"Bad Request\n"
+            else:
+                method, path = parts[0], parts[1]
+                # Drain request headers until blank line
+                while True:
+                    hdr = await reader.readline()
+                    if not hdr or hdr in (b"\r\n", b"\n"):
+                        break
+                status, ctype, body = self.handler(method, path)
+
+            status_messages = {
+                200: "OK",
+                400: "Bad Request",
+                404: "Not Found",
+                405: "Method Not Allowed",
+                500: "Internal Server Error",
+            }
+            reason = status_messages.get(status, "Unknown")
+            response_header = (
+                f"HTTP/1.1 {status} {reason}\r\n"
+                f"Content-Type: {ctype}\r\n"
+                f"Content-Length: {len(body)}\r\n"
+                f"Connection: close\r\n\r\n"
+            )
+            writer.write(response_header.encode("utf-8") + body)
+            await writer.drain()
+        except Exception:
+            pass
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+    async def stop(self) -> None:
+        """Stop HTTP server and wait for listener socket to close."""
+        self._closed = True
+        if self._server is not None:
+            self._server.close()
+            with contextlib.suppress(Exception):
+                await self._server.wait_closed()
