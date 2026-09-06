@@ -1,0 +1,17 @@
+================================================================================
+PEERQ BENCHMARK: Throughput Benchmark
+Timestamp:   2026-09-06 12:45:45 UTC
+Python:      3.12.4 (CPython)
+Platform:    Darwin 25.5.0 (arm64)
+Processor:   arm
+Command:     /Users/ege/GitHub Portfolio/.venv/bin/python bench/throughput.py
+================================================================================
+Cluster initialized with 3 peers.
+Submitting and processing 5000 tasks...
+
+Results:
+  Total Tasks:       5,000
+  Elapsed Time:      0.7211 s
+  Throughput:        6,933.91 tasks/sec
+  Avg Latency/Task:  144.22 µs
+================================================================================

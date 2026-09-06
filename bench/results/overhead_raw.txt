@@ -1,0 +1,16 @@
+================================================================================
+PEERQ BENCHMARK: Telemetry & Instrumentation Overhead
+Timestamp:   2026-09-06 12:45:52 UTC
+Python:      3.12.4 (CPython)
+Platform:    Darwin 25.5.0 (arm64)
+Processor:   arm
+Command:     /Users/ege/GitHub Portfolio/.venv/bin/python bench/overhead.py
+================================================================================
+Running 500,000 iterations per benchmark component...
+
+Measured Instrumentation Overhead (per operation):
+  LogLinearHistogram.record():  603.42 ns
+  MetricsCollector.increment(): 94.84 ns
+  VectorClock.increment():      744.36 ns
+  Baseline loop overhead:       43.79 ns
+================================================================================

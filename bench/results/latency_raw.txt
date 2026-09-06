@@ -1,0 +1,22 @@
+================================================================================
+PEERQ BENCHMARK: Task Turnaround Latency Benchmark
+Timestamp:   2026-09-06 12:45:48 UTC
+Python:      3.12.4 (CPython)
+Platform:    Darwin 25.5.0 (arm64)
+Processor:   arm
+Command:     /Users/ege/GitHub Portfolio/.venv/bin/python bench/latency.py
+================================================================================
+Executing 3000 round-trip task executions...
+
+Turnaround Latency Results (microseconds):
+  Samples:      3,000
+  Min:          128.4 µs
+  Mean:         154.9 µs
+  p50 (Median): 147.5 µs
+  p90:          166.5 µs
+  p95:          178.5 µs
+  p99:          333.0 µs
+  p99.9:        614.0 µs
+  Max:          1,106.7 µs
+  Relative Error Bound: <= 0.781%
+================================================================================
