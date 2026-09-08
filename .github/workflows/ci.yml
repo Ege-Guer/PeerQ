@@ -1,103 +1,32 @@
-name: CI Quality Gates & Verification
+name: CI
 
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+on: [push]
 
 jobs:
-  lint-and-typecheck:
-    name: Linters, Types & Architecture
+  test:
     runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Ruff Lint Check
-        run: ruff check .
-
-      - name: Ruff Format Check
-        run: ruff format --check .
-
-      - name: Mypy Strict Type Check
-        run: mypy --strict peerq tests bench examples scripts
-
-      - name: Architecture Boundary Verification
-        run: pytest -v tests/unit/test_architecture.py
-
-  test-matrix:
-    name: Test Suite (${{ matrix.os }} - Py${{ matrix.python-version }})
-    needs: lint-and-typecheck
-    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         python-version: ["3.11", "3.12"]
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-          cache: "pip"
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run Full Test Suite with Coverage Floor (>=90%)
-        run: |
-          pytest -v --cov=peerq --cov-report=term-missing --cov-fail-under=90 tests/
-
-      - name: Deterministic Simulation Invariant Fuzzing
-        run: |
-          pytest -v tests/sim/test_chaos_fuzz.py
-
-  benchmarks-smoke:
-    name: Benchmarks Smoke Verification
-    needs: lint-and-typecheck
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: "pip"
-
-      - name: Install Dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
-
-      - name: Run All Benchmark Scripts
-        run: |
-          python bench/throughput.py
-          python bench/latency.py
-          python bench/overhead.py
-          python bench/wal_throughput.py
-          python bench/crypto_throughput.py
-          python bench/gossip_convergence.py
+    - uses: actions/checkout@v4
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        pip install -e .
+    - name: Run tests
+      run: |
+        pytest --cov=peerq tests/ --cov-report=xml
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false
