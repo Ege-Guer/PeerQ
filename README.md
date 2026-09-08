@@ -1,5 +1,7 @@
 # peerq
 
+[![CI](https://github.com/Ege-Guer/PeerQ/actions/workflows/ci.yml/badge.svg)](https://github.com/Ege-Guer/PeerQ/actions/workflows/ci.yml)
+
 `peerq` is a leaderless, peer-to-peer asynchronous task mesh in Python 3.11+. Nodes operate as equal peers without brokers, coordinators, or external infrastructure (no Redis, RabbitMQ, ZooKeeper, or etcd). Peer state is synchronized via gossip anti-entropy using Conflict-Free Replicated Data Types (CRDT join-semilattices) and vector clocks, peer health is monitored dynamically via φ-accrual failure detection, and task ownership is protected by time-bounded leases with monotonically increasing fencing tokens. Delivery semantics are strictly **at-least-once**; all task handlers must be idempotent.
 
 ---
