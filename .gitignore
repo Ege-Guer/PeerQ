@@ -1,8 +1,7 @@
-# Python artifacts
+# .gitignore für Python-Projekte
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
 .Python
 build/
 develop-eggs/
@@ -19,22 +18,9 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
-# Virtual environments
-.venv/
-venv/
-ENV/
-
-# Testing & Type Checking
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.hypothesis/
-.coverage
-.coverage.*
-htmlcov/
-
-# System / IDE
+*.log
+*.sqlite3
+.env
 .DS_Store
-.vscode/
 .idea/
+.vscode/
