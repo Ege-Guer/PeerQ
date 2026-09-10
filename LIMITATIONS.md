@@ -19,9 +19,16 @@ In accordance with our non-negotiable honesty rules, this document explicitly re
 - `peerq` uses full-mesh heartbeat monitoring and randomized gossip. Every peer maintains a failure detector history for all other known peers.
 - This design operates efficiently for small-to-medium clusters (3 to 50 nodes). It is **not** designed for thousands of nodes. Scaling to massive node counts would require hierarchical gossip overlays (e.g. SWIM / Plumtree).
 
-## 4. Crash-Fault-Tolerant Only (Non-Byzantine)
-- Assumes nodes are honest and crash-stop or crash-recovery.
-- Does not defend against Byzantine (malicious or compromised) peers that forge vector clocks or manipulate epoch counters.
+## 4. Authenticated Runtime with Explicit Trust Bootstrap
+- Normal protocol-v2 runtime traffic is authenticated with Ed25519. Unknown,
+  unsigned, stale, replayed, or tampered messages are rejected before state
+  merge.
+- This does not make the system fully Byzantine-safe: trust is anchored in the
+  operator-provisioned public-key ring, and a compromised authorized private
+  key or host remains in scope.
+- The old unsigned mode is retained only as an explicit development/test escape
+  hatch (`SecurityConfig(enabled=False)` or `--insecure-dev`). It is not a
+  secure deployment mode.
 
 ## 5. Task Payload Limits
 - Designed for task descriptors, job arguments, and references (typically < 64 KB, hard upper limit ~1 MB).

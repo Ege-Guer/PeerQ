@@ -7,7 +7,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from peerq.cli import _parse_peer_addresses, main, run_node_command, submit_task_command
+from peerq.cli import (
+    _parse_peer_addresses,
+    _parse_peer_keys,
+    main,
+    run_node_command,
+    submit_task_command,
+)
+from peerq.crypto import Ed25519KeyPair
 
 
 def test_parse_peer_addresses_valid() -> None:
@@ -32,6 +39,14 @@ def test_parse_peer_addresses_invalid() -> None:
         _parse_peer_addresses("p1=no_port_here")
 
 
+def test_parse_peer_keys_valid_and_invalid() -> None:
+    identity = Ed25519KeyPair.from_private_bytes(bytes([4]) * 32)
+    ring = _parse_peer_keys(f"peer-1={identity.public_key.to_hex()}")
+    assert ring.has_peer("peer-1")
+    with pytest.raises(ValueError, match="Invalid peer key format"):
+        _parse_peer_keys("not-a-key")
+
+
 @pytest.mark.asyncio
 async def test_run_node_command_lifecycle(monkeypatch: pytest.MonkeyPatch) -> None:
     mock_transport = AsyncMock()
@@ -42,7 +57,13 @@ async def test_run_node_command_lifecycle(monkeypatch: pytest.MonkeyPatch) -> No
         patch("peerq.cli.PeerNode", return_value=mock_node),
     ):
         task = asyncio.create_task(
-            run_node_command("node-test", "127.0.0.1", 9999, "p2=127.0.0.1:9998")
+            run_node_command(
+                "node-test",
+                "127.0.0.1",
+                9999,
+                "p2=127.0.0.1:9998",
+                insecure_dev_mode=True,
+            )
         )
         await asyncio.sleep(0.02)
         task.cancel()
@@ -57,9 +78,36 @@ async def test_run_node_command_lifecycle(monkeypatch: pytest.MonkeyPatch) -> No
 async def test_submit_task_command_success() -> None:
     mock_transport = AsyncMock()
     with patch("peerq.cli.TcpTransport", return_value=mock_transport):
-        await submit_task_command("127.0.0.1", 9999, "sender-1", "task-abc", "hello-data")
+        await submit_task_command(
+            "127.0.0.1",
+            9999,
+            "sender-1",
+            "task-abc",
+            "hello-data",
+            insecure_dev_mode=True,
+        )
         mock_transport.send.assert_awaited_once()
         mock_transport.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_submit_task_command_secure_message() -> None:
+    mock_transport = AsyncMock()
+    sender = Ed25519KeyPair.from_private_bytes(bytes([5]) * 32)
+    target = Ed25519KeyPair.from_private_bytes(bytes([6]) * 32)
+    with patch("peerq.cli.TcpTransport", return_value=mock_transport):
+        await submit_task_command(
+            "127.0.0.1",
+            9999,
+            "sender-1",
+            "task-secure",
+            "hello-data",
+            private_key_hex=sender.to_hex(),
+            target_key_hex=target.public_key.to_hex(),
+        )
+    _, message = mock_transport.send.call_args.args
+    assert message.signature is not None
+    assert message.payload["tasks"]["task-secure"]["signature"] is not None
 
 
 def test_main_node_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -175,6 +223,19 @@ async def test_run_node_command_with_discovery_and_status(tmp_path: Path) -> Non
         mock_status_server.start.assert_awaited_once()
         mock_discovery.stop.assert_awaited_once()
         mock_status_server.stop.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_run_node_command_rejects_unsafe_status_before_start() -> None:
+    with pytest.raises(ValueError, match="remote HTTP binding"):
+        await run_node_command(
+            node_id="n1",
+            host="127.0.0.1",
+            port=9001,
+            peers_str="",
+            status_host="0.0.0.0",
+            status_port=9102,
+        )
 
 
 def test_main_status_invocation(monkeypatch: pytest.MonkeyPatch) -> None:

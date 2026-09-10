@@ -1,7 +1,7 @@
 # ADR 0006: Ed25519 Digital Signatures and Byzantine Fault Resistance
 
 ## Status
-Accepted
+Accepted — runtime enforcement is protocol-v2 secure by default.
 
 ## Context
 In a decentralized, leaderless gossip mesh, all participating nodes propagate state updates via epidemic anti-entropy. In an untrusted, heterogeneous, or multi-tenant network environment, any faulty, compromised, or adversarial peer could:
@@ -30,7 +30,12 @@ We introduce cryptographic task integrity in `peerq.crypto` using Edwards-curve 
      - `task.fence_token.peer_id` MUST equal `claimed_by`.
    - An attacker cannot claim a lease under another node's identity or increment another peer's fencing token without possessing that peer's private key.
 
-4. **Cryptographic CRDT Merge**:
+4. **Runtime envelope and CRDT enforcement**:
+   - TCP handshakes and all runtime gossip/control messages carry an Ed25519
+     envelope with a protocol version, timestamp, nonce, and bounded replay
+     check. Unsigned or unknown-peer traffic is rejected before it reaches the
+     node receive loop.
+   - `merge_records(r1, r2, keyring=keyring)` incorporates authorization into the semilattice:
    - `merge_records(r1, r2, keyring=keyring)` incorporates authorization into the semilattice:
      - An unauthorized or tampered record is rejected immediately, even if it presents a higher fencing token epoch or terminal `DONE` state.
      - The legitimate authorized record is preserved.
@@ -47,3 +52,7 @@ We introduce cryptographic task integrity in `peerq.crypto` using Edwards-curve 
 - **Positive**: Seamless integration with CRDT join-semilattice merge.
 - **Positive**: Fast constant-time cryptographic verification with minimal CPU overhead.
 - **Trade-off**: Requires `cryptography` dependency for RFC 8032 curve operations.
+- **Trade-off**: Public-key bootstrap, rotation, and revocation are explicit
+  operational inputs; the protocol does not use trust-on-first-use.
+- **Trade-off**: Protocol-v1 unsigned traffic is available only through an
+  explicit development/test configuration and is not a production fallback.

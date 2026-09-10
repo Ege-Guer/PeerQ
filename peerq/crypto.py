@@ -18,6 +18,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 
+from peerq.security import MAX_PEER_ID_LENGTH
+
 if TYPE_CHECKING:
     from peerq.consensus import TaskRecord
 
@@ -70,7 +72,7 @@ class Ed25519PublicKeyWrapper:
         try:
             self._key.verify(signature, data)
             return True
-        except InvalidSignature:
+        except (InvalidSignature, TypeError, ValueError):
             return False
 
 
@@ -96,6 +98,15 @@ class Ed25519KeyPair:
         except Exception as e:
             raise InvalidKeyError(f"Failed to load private key: {e}") from e
 
+    @classmethod
+    def from_hex(cls, hex_str: str) -> Ed25519KeyPair:
+        """Load a private seed from exactly 64 hexadecimal characters."""
+        try:
+            raw = bytes.fromhex(hex_str)
+        except ValueError as e:
+            raise InvalidKeyError(f"Invalid hex string for private key: {e}") from e
+        return cls.from_private_bytes(raw)
+
     def to_private_bytes(self) -> bytes:
         """Export raw 32-byte private key seed."""
         return self._private_key.private_bytes(
@@ -103,6 +114,9 @@ class Ed25519KeyPair:
             format=serialization.PrivateFormat.Raw,
             encryption_algorithm=serialization.NoEncryption(),
         )
+
+    def to_hex(self) -> str:
+        return self.to_private_bytes().hex()
 
     @property
     def public_key(self) -> Ed25519PublicKeyWrapper:
@@ -128,6 +142,8 @@ class PeerKeyRing:
 
     def add_peer(self, peer_id: str, public_key: Ed25519PublicKeyWrapper | bytes | str) -> None:
         """Register an authorized peer ID and its public key."""
+        if not isinstance(peer_id, str) or not peer_id or len(peer_id) > MAX_PEER_ID_LENGTH:
+            raise ValueError("peer_id must be a non-empty bounded string")
         if isinstance(public_key, Ed25519PublicKeyWrapper):
             self._keys[peer_id] = public_key
         elif isinstance(public_key, bytes):
@@ -146,6 +162,10 @@ class PeerKeyRing:
 
     def get_peer_key(self, peer_id: str) -> Ed25519PublicKeyWrapper | None:
         return self._keys.get(peer_id)
+
+    def items(self) -> tuple[tuple[str, Ed25519PublicKeyWrapper], ...]:
+        """Return a stable snapshot for configuration and audit tooling."""
+        return tuple(self._keys.items())
 
     def verify(self, peer_id: str, signature: bytes, data: bytes) -> bool:
         """Verify signature for a given peer ID."""

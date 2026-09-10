@@ -14,6 +14,7 @@ from dataclasses import dataclass
 
 from peerq.clock import SimClock
 from peerq.consensus import FenceToken, TaskState
+from peerq.crypto import Ed25519KeyPair, PeerKeyRing
 from peerq.node import PeerNode
 from peerq.transport import InMemoryTransport, SimNetwork
 
@@ -53,6 +54,10 @@ class SimCluster:
         self.network.base_latency = base_latency
         self.peer_ids = list(peer_ids)
         self.handler = handler
+        self.identities = {pid: Ed25519KeyPair.generate() for pid in self.peer_ids}
+        self.keyring = PeerKeyRing()
+        for pid, identity in self.identities.items():
+            self.keyring.add_peer(pid, identity.public_key)
 
         self.nodes: dict[str, PeerNode] = {}
         self.transports: dict[str, InMemoryTransport] = {}
@@ -87,6 +92,8 @@ class SimCluster:
                 heartbeat_interval=0.5,
                 gossip_interval=0.3,
                 reclaim_interval=0.5,
+                identity=self.identities[pid],
+                keyring=self.keyring,
             )
             self.nodes[pid] = node
             self.active_nodes.add(pid)
@@ -142,6 +149,8 @@ class SimCluster:
             heartbeat_interval=0.5,
             gossip_interval=0.3,
             reclaim_interval=0.5,
+            identity=self.identities[node_id],
+            keyring=self.keyring,
         )
         new_node._tasks = preserved_tasks
         new_node._vector_clock = preserved_clock

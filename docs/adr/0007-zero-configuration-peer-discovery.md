@@ -23,8 +23,14 @@ We implement `peerq.discovery.PeerDiscovery` backed by the `BroadcastTransport` 
    - Uses site-local administrative multicast (`239.255.42.99`, RFC 2365) and standard IPv4 broadcast (`255.255.255.255`).
    - Sockets enable `SO_REUSEADDR` and `SO_REUSEPORT` (BSD/macOS/Linux) and `IP_MULTICAST_LOOP`, allowing multiple local nodes or tests to bind to the same discovery port simultaneously.
 
-3. **Beacon Framing & Topology Lifecycle**:
-   - Nodes periodically broadcast small JSON beacons (`node_id`, `host`, `port`, `cluster_id`, `ts`).
+3. **Authenticated Beacon Framing & Topology Lifecycle**:
+   - Nodes periodically broadcast bounded protocol-v2 JSON envelopes signed with
+     Ed25519. The payload contains `node_id`, `host`, `port`, `cluster_id`, and
+     the advertised public key for diagnostics.
+   - A beacon is accepted only when its signer is already present in the local
+     `PeerKeyRing`, its signature and protocol version are valid, its timestamp
+     is fresh, and its nonce has not been replayed. The advertised public key
+     is never trusted automatically.
    - Different cluster IDs (`cluster_id`) are partitioned and ignored, preventing cross-environment leakage between production and test nodes on shared subnets.
    - Nodes maintain a sliding TTL window (`peer_ttl`). If a peer stops broadcasting (e.g. crash or network detachment), it is automatically purged from the active directory.
 
@@ -42,3 +48,5 @@ We implement `peerq.discovery.PeerDiscovery` backed by the `BroadcastTransport` 
 - **Positive**: Complete architectural isolation: zero socket calls outside `peerq.transport`.
 - **Positive**: 100% deterministic testing via `SimBroadcastTransport`.
 - **Trade-off**: Subnet broadcast/multicast is limited to local Layer 2 broadcast domains. WAN or cross-VPC peering still uses explicit TCP addresses.
+- **Trade-off**: Discovery is zero-address-configuration, not zero-trust-configuration:
+  operators still provision peer public keys out of band.

@@ -34,6 +34,7 @@ from peerq.failure import PhiAccrualDetector
 from peerq.metrics import LogLinearHistogram, MetricsCollector
 from peerq.node import PeerNode
 from peerq.queue import BackpressurePriorityQueue, CreditFlowController, QueueFull
+from peerq.security import MessageDecodeError, SecurityConfig
 from peerq.transport import (
     HttpServer,
     InMemoryTransport,
@@ -95,4 +96,6 @@ __all__ = [
     "HttpServer",
     "StatusServer",
     "format_cluster_status",
+    "SecurityConfig",
+    "MessageDecodeError",
 ]

@@ -24,6 +24,7 @@ from peerq.crypto import (
 from peerq.discovery import PeerDiscovery
 from peerq.exporter import StatusServer
 from peerq.node import PeerNode
+from peerq.security import SecurityConfig
 from peerq.transport import TcpTransport, UdpBroadcastTransport
 
 
@@ -40,6 +41,7 @@ async def main() -> None:
     # 1. Setup cryptographic identities
     print("\n1. Generating Ed25519 Keypairs and constructing cluster KeyRing...")
     keyring = PeerKeyRing()
+    security = SecurityConfig()
     keypairs: dict[str, Ed25519KeyPair] = {}
     node_ids = ["alpha", "beta", "gamma"]
 
@@ -61,7 +63,16 @@ async def main() -> None:
 
     for idx, nid in enumerate(node_ids):
         # TCP transport bound to dynamic port 0
-        tcp = TcpTransport(nid, "127.0.0.1", 0, {}, clock)
+        tcp = TcpTransport(
+            nid,
+            "127.0.0.1",
+            0,
+            {},
+            clock,
+            identity=keypairs[nid],
+            keyring=keyring,
+            security=security,
+        )
         await tcp.start()
 
         rng = random.Random(42 + idx)
@@ -75,12 +86,20 @@ async def main() -> None:
             lease_duration=3.0,
             gossip_interval=0.3,
             heartbeat_interval=0.5,
+            identity=keypairs[nid],
+            keyring=keyring,
+            security=security,
         )
         await node.start()
         nodes.append(node)
 
         # Discovery transport
-        udp = UdpBroadcastTransport(port=disc_port, broadcast_addr=multicast_group)
+        udp = UdpBroadcastTransport(
+            port=disc_port,
+            broadcast_addr=multicast_group,
+            clock=clock,
+            security=security,
+        )
         await udp.start()
 
         disc = PeerDiscovery(
@@ -92,6 +111,9 @@ async def main() -> None:
             cluster_id=cluster_id,
             beacon_interval=0.2,
             peer_ttl=1.5,
+            identity=keypairs[nid],
+            keyring=keyring,
+            security=security,
         )
         disc.bind_node(node)
         await disc.start()

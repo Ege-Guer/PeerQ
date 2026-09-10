@@ -10,7 +10,10 @@ import pytest
 from peerq.clock import SimClock
 from peerq.discovery import DiscoveredPeer, PeerDiscovery
 from peerq.node import PeerNode
+from peerq.security import SecurityConfig
 from peerq.transport import InMemoryTransport, SimBroadcastTransport, SimNetwork
+
+LEGACY_SECURITY = SecurityConfig(enabled=False)
 
 
 @pytest.mark.asyncio
@@ -32,6 +35,7 @@ async def test_discovery_simulated_mesh() -> None:
         beacon_interval=0.5,
         peer_ttl=2.0,
         on_peer_discovered=discovered_n1.append,
+        security=LEGACY_SECURITY,
     )
     d2 = PeerDiscovery(
         "n2",
@@ -41,6 +45,7 @@ async def test_discovery_simulated_mesh() -> None:
         clock,
         beacon_interval=0.5,
         peer_ttl=2.0,
+        security=LEGACY_SECURITY,
     )
     d3 = PeerDiscovery(
         "n3",
@@ -50,6 +55,7 @@ async def test_discovery_simulated_mesh() -> None:
         clock,
         beacon_interval=0.5,
         peer_ttl=2.0,
+        security=LEGACY_SECURITY,
     )
 
     await d1.start()
@@ -92,8 +98,18 @@ async def test_discovery_ttl_expiration() -> None:
         beacon_interval=1.0,
         peer_ttl=2.0,
         on_peer_lost=lost_peers.append,
+        security=LEGACY_SECURITY,
     )
-    d2 = PeerDiscovery("n2", "127.0.0.1", 9002, b2, clock, beacon_interval=1.0, peer_ttl=2.0)
+    d2 = PeerDiscovery(
+        "n2",
+        "127.0.0.1",
+        9002,
+        b2,
+        clock,
+        beacon_interval=1.0,
+        peer_ttl=2.0,
+        security=LEGACY_SECURITY,
+    )
 
     await d1.start()
     await d2.start()
@@ -125,8 +141,18 @@ async def test_discovery_cluster_isolation() -> None:
     b1 = SimBroadcastTransport("n1", net)
     b2 = SimBroadcastTransport("n2", net)
 
-    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock, cluster_id="cluster-prod")
-    d2 = PeerDiscovery("n2", "127.0.0.1", 9002, b2, clock, cluster_id="cluster-staging")
+    d1 = PeerDiscovery(
+        "n1", "127.0.0.1", 9001, b1, clock, cluster_id="cluster-prod", security=LEGACY_SECURITY
+    )
+    d2 = PeerDiscovery(
+        "n2",
+        "127.0.0.1",
+        9002,
+        b2,
+        clock,
+        cluster_id="cluster-staging",
+        security=LEGACY_SECURITY,
+    )
 
     await d1.start()
     await d2.start()
@@ -154,8 +180,12 @@ async def test_discovery_bind_node() -> None:
     rng = random.Random(42)
     node = PeerNode("n1", clock, t1, rng, peers=[])
 
-    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock, beacon_interval=0.5)
-    d2 = PeerDiscovery("n2", "127.0.0.1", 9002, b2, clock, beacon_interval=0.5)
+    d1 = PeerDiscovery(
+        "n1", "127.0.0.1", 9001, b1, clock, beacon_interval=0.5, security=LEGACY_SECURITY
+    )
+    d2 = PeerDiscovery(
+        "n2", "127.0.0.1", 9002, b2, clock, beacon_interval=0.5, security=LEGACY_SECURITY
+    )
 
     d1.bind_node(node)
 
@@ -182,7 +212,7 @@ async def test_discovery_malformed_beacon_ignored() -> None:
     net = SimNetwork(clock)
 
     b1 = SimBroadcastTransport("n1", net)
-    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock)
+    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock, security=LEGACY_SECURITY)
     await d1.start()
 
     # Deliver garbage packet
@@ -246,8 +276,11 @@ async def test_discovery_bind_node_with_tcp_transport_and_callback() -> None:
         clock,
         beacon_interval=0.5,
         on_peer_discovered=discovered.append,
+        security=LEGACY_SECURITY,
     )
-    d2 = PeerDiscovery("n2", "127.0.0.1", 9002, b2, clock, beacon_interval=0.5)
+    d2 = PeerDiscovery(
+        "n2", "127.0.0.1", 9002, b2, clock, beacon_interval=0.5, security=LEGACY_SECURITY
+    )
 
     d1.bind_node(node)
     await d1.start()
@@ -271,7 +304,7 @@ async def test_discovery_malformed_partial_json() -> None:
     clock = SimClock(0.0)
     net = SimNetwork(clock)
     b1 = SimBroadcastTransport("n1", net)
-    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock)
+    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock, security=LEGACY_SECURITY)
     await d1.start()
 
     # JSON missing required 'port' or 'host'
@@ -288,7 +321,7 @@ async def test_discovery_sender_addr_formats() -> None:
     clock = SimClock(0.0)
     net = SimNetwork(clock)
     b1 = SimBroadcastTransport("n1", net)
-    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock)
+    d1 = PeerDiscovery("n1", "127.0.0.1", 9001, b1, clock, security=LEGACY_SECURITY)
     await d1.start()
 
     # Sender as string IP

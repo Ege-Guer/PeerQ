@@ -15,6 +15,7 @@ import pytest
 
 from peerq.clock import RealClock
 from peerq.consensus import TaskState
+from peerq.crypto import Ed25519KeyPair, PeerKeyRing
 from peerq.node import PeerNode
 from peerq.transport import TcpTransport
 from peerq.wal import WriteAheadLog
@@ -23,11 +24,15 @@ from peerq.wal import WriteAheadLog
 @pytest.mark.asyncio
 async def test_tcp_cluster_task_execution_and_gossip() -> None:
     clock = RealClock()
+    identities = {nid: Ed25519KeyPair.generate() for nid in ("n1", "n2", "n3")}
+    keyring = PeerKeyRing()
+    for nid, identity in identities.items():
+        keyring.add_peer(nid, identity.public_key)
 
     # 1. Allocate 3 transports on dynamic port 0
-    t1 = TcpTransport("n1", "127.0.0.1", 0, {}, clock)
-    t2 = TcpTransport("n2", "127.0.0.1", 0, {}, clock)
-    t3 = TcpTransport("n3", "127.0.0.1", 0, {}, clock)
+    t1 = TcpTransport("n1", "127.0.0.1", 0, {}, clock, identities["n1"], keyring)
+    t2 = TcpTransport("n2", "127.0.0.1", 0, {}, clock, identities["n2"], keyring)
+    t3 = TcpTransport("n3", "127.0.0.1", 0, {}, clock, identities["n3"], keyring)
 
     await t1.start()
     await t2.start()
@@ -59,6 +64,8 @@ async def test_tcp_cluster_task_execution_and_gossip() -> None:
         peers=["n2", "n3"],
         gossip_interval=0.1,
         heartbeat_interval=0.2,
+        identity=identities["n1"],
+        keyring=keyring,
     )
     n2 = PeerNode(
         "n2",
@@ -69,6 +76,8 @@ async def test_tcp_cluster_task_execution_and_gossip() -> None:
         handler=uppercase_handler,
         gossip_interval=0.1,
         heartbeat_interval=0.2,
+        identity=identities["n2"],
+        keyring=keyring,
     )
     n3 = PeerNode(
         "n3",
@@ -78,6 +87,8 @@ async def test_tcp_cluster_task_execution_and_gossip() -> None:
         peers=["n1", "n2"],
         gossip_interval=0.1,
         heartbeat_interval=0.2,
+        identity=identities["n3"],
+        keyring=keyring,
     )
 
     await n1.start()
@@ -130,8 +141,11 @@ async def test_tcp_cluster_task_execution_and_gossip() -> None:
 async def test_tcp_node_wal_crash_recovery(tmp_path: Path) -> None:
     clock = RealClock()
     wal_file = tmp_path / "tcp_node.wal"
+    identity = Ed25519KeyPair.generate()
+    keyring = PeerKeyRing()
+    keyring.add_peer("node-tcp", identity.public_key)
 
-    t = TcpTransport("node-tcp", "127.0.0.1", 0, {}, clock)
+    t = TcpTransport("node-tcp", "127.0.0.1", 0, {}, clock, identity, keyring)
     await t.start()
 
     async def double_handler(payload: bytes) -> bytes:
@@ -139,7 +153,17 @@ async def test_tcp_node_wal_crash_recovery(tmp_path: Path) -> None:
 
     wal = WriteAheadLog(wal_file)
     rng = random.Random(42)
-    node = PeerNode("node-tcp", clock, t, rng, peers=[], handler=double_handler, wal=wal)
+    node = PeerNode(
+        "node-tcp",
+        clock,
+        t,
+        rng,
+        peers=[],
+        handler=double_handler,
+        wal=wal,
+        identity=identity,
+        keyring=keyring,
+    )
 
     await node.start()
     await node.submit_task("t-tcp-wal", b"persist-over-tcp")
@@ -161,11 +185,19 @@ async def test_tcp_node_wal_crash_recovery(tmp_path: Path) -> None:
 
     # Re-open WAL in fresh instance
     wal_reboot = WriteAheadLog(wal_file)
-    t_reboot = TcpTransport("node-tcp", "127.0.0.1", 0, {}, clock)
+    t_reboot = TcpTransport("node-tcp", "127.0.0.1", 0, {}, clock, identity, keyring)
     await t_reboot.start()
 
     reboot_node = PeerNode(
-        "node-tcp", clock, t_reboot, rng, peers=[], handler=double_handler, wal=wal_reboot
+        "node-tcp",
+        clock,
+        t_reboot,
+        rng,
+        peers=[],
+        handler=double_handler,
+        wal=wal_reboot,
+        identity=identity,
+        keyring=keyring,
     )
     assert reboot_node.get_task("t-tcp-wal") is None
 

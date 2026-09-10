@@ -12,6 +12,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from peerq.consensus import TaskState
+from peerq.security import SecurityConfig
 from peerq.transport import HttpServer
 
 if TYPE_CHECKING:
@@ -570,11 +571,24 @@ class StatusServer:
     - /healthz: Liveness check returning 200 OK
     """
 
-    def __init__(self, node: PeerNode, host: str = "127.0.0.1", port: int = 9102) -> None:
+    def __init__(
+        self,
+        node: PeerNode,
+        host: str = "127.0.0.1",
+        port: int = 9102,
+        security: SecurityConfig | None = None,
+        auth_token: str | None = None,
+    ) -> None:
         self.node = node
         self.host = host
         self.port = port
-        self._server = HttpServer(host, port, self._handle_request)
+        self._server = HttpServer(
+            host,
+            port,
+            self._handle_request,
+            security=security or node.security,
+            auth_token=auth_token,
+        )
 
     def _handle_request(self, method: str, path: str) -> tuple[int, str, bytes]:
         if method != "GET":

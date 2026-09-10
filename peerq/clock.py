@@ -22,6 +22,10 @@ class Clock(Protocol):
         """Return the current monotonic timestamp in seconds."""
         ...
 
+    def wall_now(self) -> float:
+        """Return a comparable Unix timestamp for cross-process freshness checks."""
+        ...
+
     async def sleep(self, delay: float) -> None:
         """Asynchronously suspend execution for the specified duration in seconds."""
         ...
@@ -32,6 +36,9 @@ class RealClock:
 
     def now(self) -> float:
         return time.monotonic()
+
+    def wall_now(self) -> float:
+        return time.time()
 
     async def sleep(self, delay: float) -> None:
         if delay > 0:
@@ -55,6 +62,11 @@ class SimClock:
         self._counter: int = 0
 
     def now(self) -> float:
+        return self._now
+
+    def wall_now(self) -> float:
+        # Simulation timestamps are deliberately deterministic and comparable
+        # across all simulated peers.
         return self._now
 
     async def sleep(self, delay: float) -> None:

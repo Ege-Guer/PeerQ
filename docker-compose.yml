@@ -19,6 +19,8 @@ services:
       - "docker-mesh"
       - "--status-port"
       - "9102"
+      - "--status-host"
+      - "127.0.0.1"
       - "--wal-path"
       - "/app/data/node1.wal"
     ports:
@@ -48,6 +50,8 @@ services:
       - "docker-mesh"
       - "--status-port"
       - "9102"
+      - "--status-host"
+      - "127.0.0.1"
       - "--wal-path"
       - "/app/data/node2.wal"
     ports:
@@ -77,6 +81,8 @@ services:
       - "docker-mesh"
       - "--status-port"
       - "9102"
+      - "--status-host"
+      - "127.0.0.1"
       - "--wal-path"
       - "/app/data/node3.wal"
     ports:

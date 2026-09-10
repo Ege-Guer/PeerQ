@@ -212,6 +212,7 @@ def test_wal_replay_torn_frame_header_strict(tmp_path: Path) -> None:
 async def test_node_recover_from_checkpoint(tmp_path: Path) -> None:
     from peerq.clock import SimClock
     from peerq.node import PeerNode
+    from peerq.security import SecurityConfig
     from peerq.transport import InMemoryTransport, SimNetwork
 
     clock = SimClock(0.0)
@@ -247,7 +248,18 @@ async def test_node_recover_from_checkpoint(tmp_path: Path) -> None:
     wal.close()
 
     wal_for_node = WriteAheadLog(wal_path)
-    node = PeerNode("n1", clock, t, rng, peers=[], wal=wal_for_node)
+    # This fixture intentionally exercises the pre-signature WAL format.
+    # Secure nodes must reject these legacy records; the secure rejection path
+    # is covered separately in the security regression tests.
+    node = PeerNode(
+        "n1",
+        clock,
+        t,
+        rng,
+        peers=[],
+        wal=wal_for_node,
+        security=SecurityConfig(enabled=False),
+    )
 
     await node.start()
     task1 = node.get_task("t1")

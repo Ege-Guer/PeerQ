@@ -7,6 +7,7 @@ import pytest
 
 from peerq.clock import SimClock
 from peerq.consensus import TaskState
+from peerq.crypto import Ed25519KeyPair, PeerKeyRing
 from peerq.node import PeerNode
 from peerq.transport import InMemoryTransport, SimNetwork
 from peerq.wal import WriteAheadLog
@@ -55,13 +56,35 @@ async def test_node_multi_peer_gossip() -> None:
     t2 = InMemoryTransport("node-2", net)
     rng1 = random.Random(101)
     rng2 = random.Random(102)
+    identities = {nid: Ed25519KeyPair.generate() for nid in ("node-1", "node-2")}
+    keyring = PeerKeyRing()
+    for nid, identity in identities.items():
+        keyring.add_peer(nid, identity.public_key)
 
     async def handler_2(payload: bytes) -> bytes:
         return payload + b"-processed-by-node-2"
 
     # Node 1 submits without handler, Node 2 processes with handler
-    node1 = PeerNode("node-1", clock, t1, rng1, peers=["node-2"], handler=None)
-    node2 = PeerNode("node-2", clock, t2, rng2, peers=["node-1"], handler=handler_2)
+    node1 = PeerNode(
+        "node-1",
+        clock,
+        t1,
+        rng1,
+        peers=["node-2"],
+        handler=None,
+        identity=identities["node-1"],
+        keyring=keyring,
+    )
+    node2 = PeerNode(
+        "node-2",
+        clock,
+        t2,
+        rng2,
+        peers=["node-1"],
+        handler=handler_2,
+        identity=identities["node-2"],
+        keyring=keyring,
+    )
 
     await node1.start()
     await node2.start()
@@ -101,6 +124,10 @@ async def test_node_crash_and_lease_reclaim() -> None:
     t2 = InMemoryTransport("node-2", net)
     rng1 = random.Random(201)
     rng2 = random.Random(202)
+    identities = {nid: Ed25519KeyPair.generate() for nid in ("node-1", "node-2")}
+    keyring = PeerKeyRing()
+    for nid, identity in identities.items():
+        keyring.add_peer(nid, identity.public_key)
 
     # Handler on Node 1 hangs/dies mid-task
     async def hanging_handler(payload: bytes) -> bytes:
@@ -120,6 +147,8 @@ async def test_node_crash_and_lease_reclaim() -> None:
         lease_duration=2.0,
         heartbeat_interval=0.5,
         reclaim_interval=0.5,
+        identity=identities["node-1"],
+        keyring=keyring,
     )
     node2 = PeerNode(
         "node-2",
@@ -131,6 +160,8 @@ async def test_node_crash_and_lease_reclaim() -> None:
         lease_duration=2.0,
         heartbeat_interval=0.5,
         reclaim_interval=0.5,
+        identity=identities["node-2"],
+        keyring=keyring,
     )
 
     await node1.start()
@@ -179,6 +210,9 @@ async def test_node_wal_crash_recovery(tmp_path: Path) -> None:
     net = SimNetwork(clock)
     t1 = InMemoryTransport("node-1", net)
     rng = random.Random(42)
+    identity = Ed25519KeyPair.generate()
+    keyring = PeerKeyRing()
+    keyring.add_peer("node-1", identity.public_key)
     wal_path = tmp_path / "node1.wal"
 
     async def upper_handler(payload: bytes) -> bytes:
@@ -193,6 +227,8 @@ async def test_node_wal_crash_recovery(tmp_path: Path) -> None:
         peers=[],
         handler=upper_handler,
         wal=wal1,
+        identity=identity,
+        keyring=keyring,
     )
 
     await node1.start()
@@ -218,6 +254,8 @@ async def test_node_wal_crash_recovery(tmp_path: Path) -> None:
         peers=[],
         handler=upper_handler,
         wal=wal_reboot,
+        identity=identity,
+        keyring=keyring,
     )
 
     # Before start, memory is empty
@@ -398,6 +436,10 @@ async def test_node_reclaim_without_handler_resets_to_pending() -> None:
     t2 = InMemoryTransport("node-worker", net)
     rng1 = random.Random(301)
     rng2 = random.Random(302)
+    identities = {nid: Ed25519KeyPair.generate() for nid in ("node-client", "node-worker")}
+    keyring = PeerKeyRing()
+    for nid, identity in identities.items():
+        keyring.add_peer(nid, identity.public_key)
 
     async def hanging_worker(payload: bytes) -> bytes:
         await clock.sleep(100.0)
@@ -414,6 +456,8 @@ async def test_node_reclaim_without_handler_resets_to_pending() -> None:
         lease_duration=2.0,
         heartbeat_interval=0.5,
         reclaim_interval=0.5,
+        identity=identities["node-client"],
+        keyring=keyring,
     )
     worker = PeerNode(
         "node-worker",
@@ -425,6 +469,8 @@ async def test_node_reclaim_without_handler_resets_to_pending() -> None:
         lease_duration=2.0,
         heartbeat_interval=0.5,
         reclaim_interval=0.5,
+        identity=identities["node-worker"],
+        keyring=keyring,
     )
 
     await client.start()

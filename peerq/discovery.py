@@ -17,7 +17,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from peerq.clock import Clock
-from peerq.transport import BroadcastTransport, TcpTransport
+from peerq.crypto import Ed25519KeyPair, PeerKeyRing
+from peerq.security import (
+    MAX_PEER_ID_LENGTH,
+    MessageDecodeError,
+    ReplayCache,
+    SecurityConfig,
+)
+from peerq.transport import BroadcastTransport, Message, TcpTransport
 
 if TYPE_CHECKING:
     from peerq.node import PeerNode
@@ -51,7 +58,12 @@ class PeerDiscovery:
         peer_ttl: float = 3.5,
         on_peer_discovered: Callable[[DiscoveredPeer], None] | None = None,
         on_peer_lost: Callable[[str], None] | None = None,
+        identity: Ed25519KeyPair | None = None,
+        keyring: PeerKeyRing | None = None,
+        security: SecurityConfig | None = None,
     ) -> None:
+        if not node_id or len(node_id) > MAX_PEER_ID_LENGTH:
+            raise ValueError("node_id must be a non-empty bounded string")
         self.node_id = node_id
         self.tcp_host = tcp_host
         self.tcp_port = tcp_port
@@ -62,6 +74,15 @@ class PeerDiscovery:
         self.peer_ttl = peer_ttl
         self.on_peer_discovered = on_peer_discovered
         self.on_peer_lost = on_peer_lost
+        self.identity = identity or Ed25519KeyPair.generate()
+        self.keyring = keyring or PeerKeyRing()
+        existing_key = self.keyring.get_peer_key(node_id)
+        if existing_key is None:
+            self.keyring.add_peer(node_id, self.identity.public_key)
+        elif existing_key.to_bytes() != self.identity.public_key.to_bytes():
+            raise ValueError("keyring identity does not match the discovery identity")
+        self.security = security or SecurityConfig()
+        self._replay_cache = ReplayCache(self.security.replay_cache_size)
 
         self._peers: dict[str, DiscoveredPeer] = {}
         self._running = False
@@ -88,6 +109,13 @@ class PeerDiscovery:
 
         def _on_discovered(peer: DiscoveredPeer) -> None:
             if self._bound_node is None or peer.node_id == self.node_id:
+                return
+            if self.security.enabled and not self._bound_node.keyring.has_peer(peer.node_id):
+                return
+            if (
+                peer.node_id not in self._bound_node.peers
+                and len(self._bound_node.peers) >= self.security.max_peers
+            ):
                 return
             if peer.node_id not in self._bound_node.peers:
                 self._bound_node.peers.append(peer.node_id)
@@ -128,6 +156,21 @@ class PeerDiscovery:
         await self.broadcast_transport.close()
 
     def _encode_beacon(self) -> bytes:
+        if self.security.enabled:
+            message = Message(
+                "discovery",
+                self.node_id,
+                {
+                    "cluster_id": self.cluster_id,
+                    "host": self.tcp_host,
+                    "node_id": self.node_id,
+                    "port": self.tcp_port,
+                    "public_key": self.identity.public_key.to_hex(),
+                },
+                protocol_version=self.security.protocol_version,
+            ).signed(self.identity, timestamp=self.clock.wall_now())
+            return message.to_bytes(max_size=self.security.max_udp_payload)[4:]
+
         payload = {
             "node_id": self.node_id,
             "host": self.tcp_host,
@@ -155,21 +198,71 @@ class PeerDiscovery:
                 continue
 
             try:
-                data = json.loads(raw_data.decode("utf-8"))
-                remote_id = str(data["node_id"])
-                remote_host = str(data["host"])
+                if len(raw_data) > self.security.max_udp_payload:
+                    raise MessageDecodeError("discovery datagram exceeds the configured limit")
+                if self.security.enabled:
+                    message = Message.from_bytes(raw_data, self.security)
+                    if (
+                        message.msg_type != "discovery"
+                        or message.protocol_version != self.security.protocol_version
+                        or not message.verify_signature(self.keyring)
+                        or message.timestamp is None
+                        or message.nonce is None
+                    ):
+                        continue
+                    now_wall = self.clock.wall_now()
+                    if abs(now_wall - message.timestamp) > self.security.replay_window_seconds:
+                        continue
+                    if not self._replay_cache.check_and_remember(
+                        message.sender_id,
+                        message.nonce,
+                        now_wall,
+                        self.security.replay_window_seconds,
+                    ):
+                        continue
+                    data = message.payload
+                    remote_id = message.sender_id
+                    if data.get("node_id") != remote_id:
+                        continue
+                else:
+                    data = json.loads(raw_data.decode("utf-8"))
+                    remote_id = data["node_id"]
+                if not isinstance(remote_id, str) or not remote_id:
+                    continue
+                if len(remote_id) > MAX_PEER_ID_LENGTH:
+                    continue
+                remote_host = data["host"]
+                if not isinstance(remote_host, str) or not remote_host or len(remote_host) > 253:
+                    continue
                 if remote_host in ("0.0.0.0", "", "::") and _sender_addr:
                     if isinstance(_sender_addr, (tuple, list)):
                         remote_host = str(_sender_addr[0])
                     else:
                         remote_host = str(_sender_addr)
-                remote_port = int(data["port"])
-                cluster_id = str(data.get("cluster_id", ""))
+                if not remote_host or any(ch.isspace() or ch in "\x00/\\" for ch in remote_host):
+                    continue
+                remote_port = data["port"]
+                if (
+                    not isinstance(remote_port, int)
+                    or isinstance(remote_port, bool)
+                    or not 1 <= remote_port <= 65535
+                ):
+                    continue
+                cluster_id = data.get("cluster_id", "")
+                if not isinstance(cluster_id, str) or len(cluster_id) > 128:
+                    continue
             except Exception:
                 continue
 
             # Ignore own beacons and differing clusters
             if remote_id == self.node_id or cluster_id != self.cluster_id:
+                continue
+
+            if self.security.enabled and not self.keyring.has_peer(remote_id):
+                # Discovery is signed, but a signature is not authorization.
+                # Trust must be provisioned out of band in the key ring.
+                continue
+            if remote_id not in self._peers and len(self._peers) >= self.security.max_peers:
                 continue
 
             now = self.clock.now()

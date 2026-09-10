@@ -142,7 +142,16 @@ To integrate `peerq` into your project or invoke it from an autonomous AI agent,
 import asyncio
 import random
 import socket
-from peerq import PeerNode, RealClock, TcpTransport, UdpBroadcastTransport, PeerDiscovery
+from peerq import (
+    Ed25519KeyPair,
+    PeerDiscovery,
+    PeerKeyRing,
+    PeerNode,
+    RealClock,
+    SecurityConfig,
+    TcpTransport,
+    UdpBroadcastTransport,
+)
 
 
 # 1. Define your project-specific task execution logic
@@ -156,10 +165,22 @@ async def my_task_handler(payload: bytes) -> bytes:
 async def main():
     my_id = socket.gethostname().split(".")[0].lower()
     clock = RealClock()
+    identity = Ed25519KeyPair.generate()
+    keyring = PeerKeyRing()
+    keyring.add_peer(my_id, identity.public_key)
+    security = SecurityConfig()
+    # Add every expected peer's public key to this ring before enabling discovery.
 
     # 2. Bind TCP transport to all interfaces (0.0.0.0) for network reachability
     transport = TcpTransport(
-        node_id=my_id, host="0.0.0.0", port=9001, peer_addresses={}, clock=clock
+        node_id=my_id,
+        host="0.0.0.0",
+        port=9001,
+        peer_addresses={},
+        clock=clock,
+        identity=identity,
+        keyring=keyring,
+        security=security,
     )
     await transport.start()
 
@@ -171,11 +192,14 @@ async def main():
         rng=random.Random(),
         peers=[],
         handler=my_task_handler,
+        identity=identity,
+        keyring=keyring,
+        security=security,
     )
     await node.start()
 
     # 4. Enable zero-config UDP discovery (auto-pairs with other nodes on LAN/WiFi)
-    b_transport = UdpBroadcastTransport(port=19876)
+    b_transport = UdpBroadcastTransport(port=19876, clock=clock, security=security)
     await b_transport.start()
     discovery = PeerDiscovery(
         node_id=my_id,
@@ -183,6 +207,9 @@ async def main():
         tcp_port=transport.port,
         broadcast_transport=b_transport,
         clock=clock,
+        identity=identity,
+        keyring=keyring,
+        security=security,
     )
     discovery.bind_node(node)
     await discovery.start()
@@ -214,20 +241,28 @@ To connect nodes across different physical machines (e.g. your **MacBook** and y
    pip install -e .
    ```
 
-2. **Start a node on Machine 1 (MacBook)**:
+2. **Provision identities before starting**: generate one Ed25519 private seed per
+   node and exchange only the corresponding public keys through a trusted channel.
+   Discovery does not trust an unknown public key from the network.
+
+3. **Start a node on Machine 1 (MacBook)**:
    ```bash
-   peerq node --id macbook --host 0.0.0.0 --port 9001 --discovery --status-port 9102
+   peerq node --id macbook --host 0.0.0.0 --port 9001 --discovery \
+     --private-key-hex <macbook-private-seed> \
+     --peer-keys pc-worker=<pc-worker-public-key> --status-port 9102
    ```
 
-3. **Start a node on Machine 2 (PC / Linux)**:
+4. **Start a node on Machine 2 (PC / Linux)**:
    ```bash
-   peerq node --id pc-worker --host 0.0.0.0 --port 9001 --discovery --status-port 9102
+   peerq node --id pc-worker --host 0.0.0.0 --port 9001 --discovery \
+     --private-key-hex <pc-worker-private-seed> \
+     --peer-keys macbook=<macbook-public-key> --status-port 9102
    ```
 
 > [!TIP]
 > - **Zero-Config Pairing**: The nodes will automatically find each other via UDP multicast beacon on port 19876 and establish direct TCP mesh links.
 > - **Firewall Note**: If your operating system (macOS Application Firewall or Windows Defender) displays a network prompt, select **Allow / Erlauben** for Python to accept incoming traffic on TCP 9001 and UDP 19876.
-> - **Web Dashboard**: Open `http://localhost:9102` in your browser on either device to view the live cluster topology and active task leases in real time.
+> - **Web Dashboard**: The dashboard binds to loopback by default. To expose it remotely, use `--status-host 0.0.0.0 --status-token <random-token-of-at-least-32-chars>` and protect the connection with TLS or a trusted network boundary.
 
 ---
 
@@ -236,17 +271,25 @@ To connect nodes across different physical machines (e.g. your **MacBook** and y
 The `peerq` CLI provides native commands for production nodes and task ingestion:
 
 ```bash
-# 1. Start a node with zero-config UDP discovery and HTTP status dashboard
-peerq node --id node-1 --port 9001 --discovery --status-port 9102
+# 1. Start a node with authenticated UDP discovery and local-only status
+peerq node --id node-1 --port 9001 --discovery --status-port 9102 \
+  --private-key-hex <private-seed> --peer-keys node-2=<public-key>
 
 # 2. Start a peer node on the same machine/LAN (finds node-1 automatically)
-peerq node --id node-2 --port 9002 --discovery --status-port 9103
+peerq node --id node-2 --port 9002 --discovery --status-port 9103 \
+  --private-key-hex <private-seed> --peer-keys node-1=<public-key>
 
 # 3. Query cluster topology, queue depth, and health over HTTP
 peerq status --endpoint http://127.0.0.1:9102/status
 
-# 4. Ingest a task into the running mesh
-peerq submit --target-port 9001 --task-id task-100 --payload "process-dataset"
+# 4. Ingest a signed task into the running mesh. Provision the submitter's
+#    public key on node-1 with --peer-keys cli-client=<client-public-key>.
+peerq submit --target-id node-1 --target-port 9001 \
+  --target-key-hex <node-1-public-key> --private-key-hex <client-private-seed> \
+  --task-id task-100 --payload "process-dataset"
+
+# Explicitly isolated unsigned development mode (never use for a shared network)
+peerq node --id dev-node --port 9001 --insecure-dev
 ```
 
 ---
@@ -284,18 +327,28 @@ PeerQ includes a lightweight, real-time single-page web UI built directly into t
 
 ## Container Deployment (Docker & Compose)
 
-Spin up an isolated 3-node distributed mesh with automatic UDP discovery and local WAL persistence:
+Spin up an isolated 3-node container example with UDP discovery and local WAL
+persistence. Secure discovery still requires operator-provisioned peer keys;
+unknown beacons are rejected by default.
 
 ```bash
-# Build and boot 3-node auto-discovering cluster
+# Build and boot the 3-node container skeleton
 docker compose up --build
 
-# Open the live web dashboard for node-1
-open http://localhost:9102
+# The status listener is loopback-only inside each container by default. Secure
+# discovery also rejects unknown beacons until the operator provisions each
+# node's Ed25519 private key and the matching --peer-keys entries. This keeps
+# the example fail-closed; see docs/SECURITY.md for the provisioning contract.
 
-# Query node-2 dashboard
-curl http://localhost:9103/status
+# Query node-2 dashboard from inside its container
+docker compose exec node-2 python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:9102/status').read().decode())"
 ```
+
+The published host ports are not dashboard access while the services bind to
+container loopback. For intentional remote dashboard access, configure a
+32-character-or-longer bearer token and an explicit non-loopback
+`--status-host`; protect that connection with TLS or a trusted network
+boundary. Do not use `--insecure-dev` outside an isolated development test.
 
 ---
 

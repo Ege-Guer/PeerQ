@@ -3,6 +3,8 @@ import asyncio
 import pytest
 
 from peerq.clock import RealClock, SimClock
+from peerq.crypto import Ed25519KeyPair, PeerKeyRing
+from peerq.security import SecurityConfig
 from peerq.transport import InMemoryTransport, Message, SimNetwork, TcpTransport
 
 
@@ -92,15 +94,21 @@ async def test_tcp_transport_loopback() -> None:
         "peer-1": ("127.0.0.1", port1),
         "peer-2": ("127.0.0.1", port2),
     }
+    identities = {"peer-1": Ed25519KeyPair.generate(), "peer-2": Ed25519KeyPair.generate()}
+    keyring = PeerKeyRing()
+    for peer_id, identity in identities.items():
+        keyring.add_peer(peer_id, identity.public_key)
 
-    t1 = TcpTransport("peer-1", "127.0.0.1", port1, peer_map, clock)
-    t2 = TcpTransport("peer-2", "127.0.0.1", port2, peer_map, clock)
+    t1 = TcpTransport("peer-1", "127.0.0.1", port1, peer_map, clock, identities["peer-1"], keyring)
+    t2 = TcpTransport("peer-2", "127.0.0.1", port2, peer_map, clock, identities["peer-2"], keyring)
 
     await t1.start()
     await t2.start()
 
     try:
-        msg = Message("greet", "peer-1", {"hello": "world"})
+        msg = Message("greet", "peer-1", {"hello": "world"}).signed(
+            identities["peer-1"], timestamp=clock.wall_now()
+        )
         await t1.send("peer-2", msg)
 
         sender, received = await t2.recv()
@@ -109,7 +117,9 @@ async def test_tcp_transport_loopback() -> None:
         assert received.payload == {"hello": "world"}
 
         # Reply back
-        reply = Message("ack", "peer-2", {"ok": True})
+        reply = Message("ack", "peer-2", {"ok": True}).signed(
+            identities["peer-2"], timestamp=clock.wall_now()
+        )
         await t2.send("peer-1", reply)
         reply_sender, reply_received = await t1.recv()
         assert reply_sender == "peer-2"
@@ -159,7 +169,7 @@ async def test_in_memory_transport_packet_drop_and_latency() -> None:
 @pytest.mark.asyncio
 async def test_tcp_transport_errors() -> None:
     clock = RealClock()
-    t = TcpTransport("p1", "127.0.0.1", 18099, {}, clock)
+    t = TcpTransport("p1", "127.0.0.1", 18099, {}, clock, security=SecurityConfig(enabled=False))
 
     # Sending to unregistered peer -> ValueError
     with pytest.raises(ValueError, match="Unknown peer address"):

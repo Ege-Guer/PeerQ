@@ -13,7 +13,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
+from math import isfinite
 from typing import TYPE_CHECKING, Any
+
+from peerq.security import (
+    MAX_ERROR_LENGTH,
+    MAX_PEER_ID_LENGTH,
+    MAX_TASK_ID_LENGTH,
+    MAX_TASK_PAYLOAD,
+    MAX_TASK_RESULT,
+)
 
 if TYPE_CHECKING:
     from peerq.crypto import PeerKeyRing
@@ -165,21 +174,106 @@ class TaskRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> TaskRecord:
-        ft = data["fence_token"]
-        sig_hex = data.get("signature")
-        signature = bytes.fromhex(sig_hex) if sig_hex is not None else None
+        if not isinstance(data, dict):
+            raise ValueError("task record must be a JSON object")
+        task_id = data.get("task_id")
+        if not isinstance(task_id, str) or not task_id or len(task_id) > MAX_TASK_ID_LENGTH:
+            raise ValueError("task_id is empty or exceeds the configured limit")
+        state_raw = data.get("state")
+        if not isinstance(state_raw, str):
+            raise ValueError("task state must be a string")
+        try:
+            state = TaskState(state_raw)
+        except ValueError as exc:
+            raise ValueError("unknown task state") from exc
+
+        payload_hex = data.get("payload")
+        if not isinstance(payload_hex, str) or len(payload_hex) > MAX_TASK_PAYLOAD * 2:
+            raise ValueError("task payload exceeds the configured limit")
+        try:
+            payload = bytes.fromhex(payload_hex)
+        except ValueError as exc:
+            raise ValueError("task payload is not valid hexadecimal") from exc
+
+        result_hex = data.get("result")
+        if result_hex is not None and (
+            not isinstance(result_hex, str) or len(result_hex) > MAX_TASK_RESULT * 2
+        ):
+            raise ValueError("task result exceeds the configured limit")
+        try:
+            result = bytes.fromhex(result_hex) if result_hex is not None else None
+        except ValueError as exc:
+            raise ValueError("task result is not valid hexadecimal") from exc
+
+        error = data.get("error")
+        if error is not None and (not isinstance(error, str) or len(error) > MAX_ERROR_LENGTH):
+            raise ValueError("task error exceeds the configured limit")
+        claimed_by = data.get("claimed_by")
+        updated_by = data.get("updated_by")
         signer_id = data.get("signer_id")
+        for label, value in (
+            ("claimed_by", claimed_by),
+            ("updated_by", updated_by),
+            ("signer_id", signer_id),
+        ):
+            if value is not None and (
+                not isinstance(value, str) or not value or len(value) > MAX_PEER_ID_LENGTH
+            ):
+                raise ValueError(f"{label} is invalid")
+
+        ft = data.get("fence_token")
+        if not isinstance(ft, dict):
+            raise ValueError("fence_token must be an object")
+        epoch = ft.get("epoch")
+        fence_peer = ft.get("peer_id")
+        if (
+            not isinstance(epoch, int)
+            or isinstance(epoch, bool)
+            or epoch < 0
+            or not isinstance(fence_peer, str)
+            or len(fence_peer) > MAX_PEER_ID_LENGTH
+        ):
+            raise ValueError("fence_token is invalid")
+
+        vector_clock = data.get("vector_clock")
+        if not isinstance(vector_clock, dict) or len(vector_clock) > 128:
+            raise ValueError("vector_clock is invalid or too large")
+        for peer, counter in vector_clock.items():
+            if (
+                not isinstance(peer, str)
+                or not peer
+                or len(peer) > MAX_PEER_ID_LENGTH
+                or not isinstance(counter, int)
+                or isinstance(counter, bool)
+                or counter < 0
+            ):
+                raise ValueError("vector_clock contains an invalid entry")
+
+        lease_expiry = data.get("lease_expiry")
+        if (
+            not isinstance(lease_expiry, (int, float))
+            or isinstance(lease_expiry, bool)
+            or not isfinite(float(lease_expiry))
+        ):
+            raise ValueError("lease_expiry is invalid")
+        sig_hex = data.get("signature")
+        if sig_hex is not None and (not isinstance(sig_hex, str) or len(sig_hex) != 128):
+            raise ValueError("signature is invalid")
+        try:
+            signature = bytes.fromhex(sig_hex) if sig_hex is not None else None
+        except ValueError as exc:
+            raise ValueError("signature is not valid hexadecimal") from exc
         return cls(
-            task_id=data["task_id"],
-            state=TaskState(data["state"]),
-            payload=bytes.fromhex(data["payload"]),
-            result=bytes.fromhex(data["result"]) if data["result"] is not None else None,
-            error=data["error"],
-            claimed_by=data["claimed_by"],
-            fence_token=FenceToken(epoch=ft["epoch"], peer_id=ft["peer_id"]),
-            lease_expiry=float(data["lease_expiry"]),
-            vector_clock=VectorClock(data["vector_clock"]),
-            updated_by=data["updated_by"],
+            task_id=task_id,
+            state=state,
+            payload=payload,
+            result=result,
+            error=error,
+            claimed_by=claimed_by,
+            fence_token=FenceToken(epoch=epoch, peer_id=fence_peer),
+            lease_expiry=float(lease_expiry),
+            vector_clock=VectorClock(vector_clock),
+            updated_by=updated_by or "",
             signature=signature,
             signer_id=signer_id,
         )

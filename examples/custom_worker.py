@@ -11,6 +11,7 @@ Demonstrates how to build an application-specific worker node with PeerQ:
 from __future__ import annotations
 
 import asyncio
+import os
 import random
 import socket
 import sys
@@ -22,9 +23,12 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from peerq import (  # noqa: E402
+    Ed25519KeyPair,
     PeerDiscovery,
+    PeerKeyRing,
     PeerNode,
     RealClock,
+    SecurityConfig,
     TcpTransport,
     UdpBroadcastTransport,
 )
@@ -53,12 +57,28 @@ async def main() -> None:
     node_id = f"worker-{host_id}-{port}"
 
     clock = RealClock()
+    private_key_hex = os.environ.get("PEERQ_PRIVATE_KEY_HEX")
+    identity = (
+        Ed25519KeyPair.from_hex(private_key_hex)
+        if private_key_hex
+        else Ed25519KeyPair.generate()
+    )
+    keyring = PeerKeyRing()
+    keyring.add_peer(node_id, identity.public_key)
+    for entry in os.environ.get("PEERQ_PEER_KEYS", "").split(","):
+        if entry.strip():
+            peer_id, public_key = entry.split("=", 1)
+            keyring.add_peer(peer_id.strip(), public_key.strip())
+    security = SecurityConfig()
     transport = TcpTransport(
         node_id=node_id,
         host="0.0.0.0",
         port=port,
         peer_addresses={},
         clock=clock,
+        identity=identity,
+        keyring=keyring,
+        security=security,
     )
     await transport.start()
 
@@ -69,11 +89,14 @@ async def main() -> None:
         rng=random.Random(),
         peers=[],
         handler=process_task,
+        identity=identity,
+        keyring=keyring,
+        security=security,
     )
     await node.start()
 
     # Enable zero-config UDP discovery on local network
-    b_transport = UdpBroadcastTransport(port=19876)
+    b_transport = UdpBroadcastTransport(port=19876, clock=clock, security=security)
     await b_transport.start()
     discovery = PeerDiscovery(
         node_id=node_id,
@@ -81,6 +104,9 @@ async def main() -> None:
         tcp_port=transport.port,
         broadcast_transport=b_transport,
         clock=clock,
+        identity=identity,
+        keyring=keyring,
+        security=security,
     )
     discovery.bind_node(node)
     await discovery.start()

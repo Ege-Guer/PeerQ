@@ -19,6 +19,12 @@ from pathlib import Path
 from typing import Any
 
 from peerq.consensus import TaskRecord, VectorClock
+from peerq.security import (
+    MAX_FRAME_SIZE,
+    MessageDecodeError,
+    reject_json_constants,
+    validate_json_tree,
+)
 
 # Magic 4 bytes + 1 byte version (1) + 3 reserved padding bytes = 8 bytes
 WAL_MAGIC: bytes = b"PQWL\x01\x00\x00\x00"
@@ -60,9 +66,18 @@ class WriteAheadLog:
     Thread-safe within single-threaded asyncio event loops.
     """
 
-    def __init__(self, path: Path | str, *, sync_on_write: bool = False) -> None:
+    def __init__(
+        self,
+        path: Path | str,
+        *,
+        sync_on_write: bool = False,
+        max_record_bytes: int = MAX_FRAME_SIZE,
+    ) -> None:
         self.path: Path = Path(path).resolve()
         self.sync_on_write: bool = sync_on_write
+        self.max_record_bytes = max_record_bytes
+        if max_record_bytes <= 0:
+            raise ValueError("max_record_bytes must be positive")
         self._file: Any | None = None
         self._open()
 
@@ -104,9 +119,27 @@ class WriteAheadLog:
         """
         if self._file is None:
             raise WalError("WAL file is closed")
+        if record_type not in {RECORD_TASK, RECORD_CLOCK, RECORD_CHECKPOINT}:
+            raise WalError(f"Unknown WAL record type: {record_type}")
 
-        payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+        try:
+            validate_json_tree(
+                payload,
+                max_depth=16,
+                max_items=10_000,
+                max_string_length=self.max_record_bytes,
+            )
+            payload_bytes = json.dumps(
+                payload,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (MessageDecodeError, TypeError, ValueError) as exc:
+            raise WalError(f"WAL payload is not safely serializable: {exc}") from exc
         payload_len = len(payload_bytes)
+        if payload_len > self.max_record_bytes:
+            raise WalError("WAL record exceeds the configured size limit")
 
         # Compute CRC32 over record_type (1 byte) + payload_bytes
         crc_data = bytes([record_type]) + payload_bytes
@@ -167,6 +200,14 @@ class WriteAheadLog:
                     break  # Torn write at tail; safely stop
 
                 payload_len, expected_crc, record_type = FRAME_HEADER_STRUCT.unpack(hdr_bytes)
+                if record_type not in {RECORD_TASK, RECORD_CLOCK, RECORD_CHECKPOINT}:
+                    raise WalCorruptError(
+                        f"Unknown WAL record type {record_type} at offset {offset}"
+                    )
+                if payload_len > self.max_record_bytes:
+                    raise WalCorruptError(
+                        f"WAL payload exceeds the configured limit at offset {offset}"
+                    )
                 payload_bytes = f.read(payload_len)
 
                 if len(payload_bytes) < payload_len:
@@ -185,11 +226,21 @@ class WriteAheadLog:
                     raise WalCorruptError(msg)
 
                 try:
-                    payload = json.loads(payload_bytes.decode("utf-8"))
+                    payload = json.loads(
+                        payload_bytes.decode("utf-8"), parse_constant=reject_json_constants
+                    )
+                    validate_json_tree(
+                        payload,
+                        max_depth=16,
+                        max_items=10_000,
+                        max_string_length=self.max_record_bytes,
+                    )
                 except Exception as exc:
                     raise WalCorruptError(
                         f"Corrupt JSON payload at offset {offset}: {exc}"
                     ) from exc
+                if not isinstance(payload, dict):
+                    raise WalCorruptError(f"WAL payload is not an object at offset {offset}")
 
                 yield WalRecord(offset=offset, record_type=record_type, payload=payload)
                 offset += FRAME_HEADER_LEN + payload_len
@@ -202,21 +253,35 @@ class WriteAheadLog:
         """
         Compact the log by writing a single atomic checkpoint and truncating older history.
         """
-        self.close()
-
         tmp_path = self.path.with_suffix(".tmp")
+        payload = {
+            "tasks": {k: v.to_dict() for k, v in tasks.items()},
+            "vector_clock": vector_clock.to_dict(),
+        }
+        try:
+            validate_json_tree(
+                payload,
+                max_depth=16,
+                max_items=10_000,
+                max_string_length=self.max_record_bytes,
+            )
+            payload_bytes = json.dumps(
+                payload,
+                separators=(",", ":"),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (MessageDecodeError, TypeError, ValueError) as exc:
+            raise WalError(f"WAL checkpoint is not safely serializable: {exc}") from exc
+        payload_len = len(payload_bytes)
+        if payload_len > self.max_record_bytes:
+            raise WalError("WAL checkpoint exceeds the configured size limit")
+
+        self.close()
         with open(tmp_path, "wb") as f:
             f.write(WAL_MAGIC)
 
             # Write checkpoint record
-            payload = {
-                "tasks": {k: v.to_dict() for k, v in tasks.items()},
-                "vector_clock": vector_clock.to_dict(),
-            }
-            payload_bytes = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(
-                "utf-8"
-            )
-            payload_len = len(payload_bytes)
             crc_data = bytes([RECORD_CHECKPOINT]) + payload_bytes
             crc = zlib.crc32(crc_data) & 0xFFFFFFFF
 
@@ -229,6 +294,18 @@ class WriteAheadLog:
 
         # Atomic replacement
         tmp_path.replace(self.path)
+        # Directory metadata is part of the atomic replacement contract.  Some
+        # platforms do not permit opening a directory for fsync; in that case
+        # the file itself is still durably flushed when sync_on_write is true.
+        if self.sync_on_write:
+            try:
+                dir_fd = os.open(str(self.path.parent), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            except OSError:
+                pass
         self._open()
 
     def sync(self) -> None:

@@ -8,6 +8,7 @@ import asyncio
 import pytest
 
 from peerq.clock import RealClock
+from peerq.crypto import Ed25519KeyPair, PeerKeyRing
 from peerq.discovery import DiscoveredPeer, PeerDiscovery
 from peerq.transport import UdpBroadcastTransport
 
@@ -15,6 +16,13 @@ from peerq.transport import UdpBroadcastTransport
 @pytest.mark.asyncio
 async def test_udp_discovery_loopback() -> None:
     clock = RealClock()
+    identities = {
+        "node-udp-1": Ed25519KeyPair.generate(),
+        "node-udp-2": Ed25519KeyPair.generate(),
+    }
+    keyring = PeerKeyRing()
+    for node_id, identity in identities.items():
+        keyring.add_peer(node_id, identity.public_key)
     # Test port with SO_REUSEPORT on macOS
     test_port = 28971
     group = "239.255.42.99"
@@ -38,6 +46,8 @@ async def test_udp_discovery_loopback() -> None:
         beacon_interval=0.1,
         peer_ttl=1.0,
         on_peer_discovered=discovered_by_d1.append,
+        identity=identities["node-udp-1"],
+        keyring=keyring,
     )
 
     d2 = PeerDiscovery(
@@ -50,6 +60,8 @@ async def test_udp_discovery_loopback() -> None:
         beacon_interval=0.1,
         peer_ttl=1.0,
         on_peer_discovered=discovered_by_d2.append,
+        identity=identities["node-udp-2"],
+        keyring=keyring,
     )
 
     await d1.start()

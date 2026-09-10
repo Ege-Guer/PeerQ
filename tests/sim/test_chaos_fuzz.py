@@ -131,6 +131,8 @@ async def test_wal_simulation_reboot(tmp_path: Path) -> None:
         peers=["w2"],
         handler=simple_handler,
         wal=wal1,
+        identity=cluster.identities["w1"],
+        keyring=cluster.keyring,
     )
     cluster.nodes["w1"] = w1_with_wal
     await cluster.start()
@@ -158,6 +160,8 @@ async def test_wal_simulation_reboot(tmp_path: Path) -> None:
         peers=["w2"],
         handler=simple_handler,
         wal=wal1_reboot,
+        identity=cluster.identities["w1"],
+        keyring=cluster.keyring,
     )
     cluster.nodes["w1"] = w1_reboot
     cluster.active_nodes.add("w1")
